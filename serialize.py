@@ -575,6 +575,112 @@ def decode_lzma_extreme(blob: bytes) -> dict:
 
 
 # ==============================================================================
+# EXPERIMENT: Group same tensor types across layers
+# Sort .q tensors by type (c_q, c_k, etc.) instead of by name.
+# ==============================================================================
+
+import re
+
+def _tensor_type_key(name: str) -> tuple:
+    """Extract tensor type for grouping: (suffix_type, layer_num)."""
+    # E.g., "blocks.3.attn.c_q.weight.q" → ("attn.c_q.weight.q", 3)
+    m_match = re.match(r"blocks\.(\d+)\.(.*)", name)
+    if m_match:
+        layer = int(m_match.group(1))
+        suffix = m_match.group(2)
+        return (suffix, layer)
+    return (name, 0)
+
+
+def encode_lzma_typegroup(sota_obj: dict) -> bytes:
+    """LZMA extreme with tensors grouped by type across layers."""
+    w = sota_obj["w"]
+    m = sota_obj["m"]
+    preset = 9 | lzma.PRESET_EXTREME
+
+    q_parts = []
+    s_parts = []
+    p_parts = []
+    manifest = []
+
+    # Sort by tensor type, then layer number
+    q_names = sorted([n for n in w if n.endswith(".q")], key=_tensor_type_key)
+    s_names = sorted([n for n in w if n.endswith(".scale")], key=_tensor_type_key)
+    p_names = sorted([n for n in w if not n.endswith(".q") and not n.endswith(".scale")],
+                     key=_tensor_type_key)
+
+    for name in q_names + s_names + p_names:
+        t = w[name]
+        arr = t.numpy() if isinstance(t, torch.Tensor) else np.asarray(t)
+        if arr.ndim == 2:
+            arr = arr.T.copy()
+
+        if name.endswith(".q"):
+            stream = "q"
+        elif name.endswith(".scale"):
+            stream = "s"
+        else:
+            stream = "p"
+
+        manifest.append((name, str(arr.dtype), list(t.shape), arr.nbytes, stream))
+
+        if stream == "q":
+            q_parts.append(arr.tobytes())
+        elif stream == "s":
+            s_parts.append(arr.tobytes())
+        else:
+            p_parts.append(arr.tobytes())
+
+    q_blob = lzma.compress(b"".join(q_parts), preset=preset) if q_parts else b""
+    s_blob = lzma.compress(b"".join(s_parts), preset=preset) if s_parts else b""
+    p_blob = lzma.compress(b"".join(p_parts), preset=preset) if p_parts else b""
+    meta_blob = lzma.compress(pickle.dumps({"m": m, "manifest": manifest},
+                                            protocol=pickle.HIGHEST_PROTOCOL), preset=preset)
+
+    out = io.BytesIO()
+    out.write(b"G")  # magic for grouped
+    for blob in (q_blob, s_blob, p_blob):
+        out.write(struct.pack("<I", len(blob)))
+        out.write(blob)
+    out.write(meta_blob)
+    return out.getvalue()
+
+
+def decode_lzma_typegroup(blob: bytes) -> dict:
+    """Decode type-grouped LZMA format."""
+    buf = io.BytesIO(blob)
+    assert buf.read(1) == b"G"
+
+    q_len = struct.unpack("<I", buf.read(4))[0]
+    q_raw = lzma.decompress(buf.read(q_len)) if q_len > 0 else b""
+    s_len = struct.unpack("<I", buf.read(4))[0]
+    s_raw = lzma.decompress(buf.read(s_len)) if s_len > 0 else b""
+    p_len = struct.unpack("<I", buf.read(4))[0]
+    p_raw = lzma.decompress(buf.read(p_len)) if p_len > 0 else b""
+    meta_obj = pickle.loads(lzma.decompress(buf.read()))
+
+    m_meta = meta_obj["m"]
+    manifest = meta_obj["manifest"]
+    w = {}
+    offsets = {"q": 0, "s": 0, "p": 0}
+    raw_map = {"q": q_raw, "s": s_raw, "p": p_raw}
+
+    for name, dtype_str, shape, nbytes, stream in manifest:
+        off = offsets[stream]
+        raw_bytes = raw_map[stream][off:off + nbytes]
+        offsets[stream] = off + nbytes
+
+        dt = np.dtype(dtype_str)
+        if len(shape) == 2:
+            arr = np.frombuffer(raw_bytes, dtype=dt).reshape(shape[1], shape[0]).T.copy()
+        else:
+            arr = np.frombuffer(raw_bytes, dtype=dt).reshape(shape).copy()
+        w[name] = torch.from_numpy(arr)
+
+    return {"w": w, "m": m_meta}
+
+
+# ==============================================================================
 # HELPERS
 # ==============================================================================
 

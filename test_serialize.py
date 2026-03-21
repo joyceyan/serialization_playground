@@ -20,12 +20,14 @@ from serialize import (
     decode_lzma_all,
     decode_lzma_extreme,
     decode_lzma_streams,
+    decode_lzma_typegroup,
     decode_separate_streams,
     decode_transpose_v1,
     encode_baseline,
     encode_lzma_all,
     encode_lzma_extreme,
     encode_lzma_streams,
+    encode_lzma_typegroup,
     encode_separate_streams,
     encode_transpose_v1,
     load_and_convert,
@@ -122,6 +124,7 @@ def test_synthetic() -> None:
         roundtrip_check("lzma_streams (synthetic)", encode_lzma_streams, decode_lzma_streams, sota_obj)
         roundtrip_check("lzma_all (synthetic)", encode_lzma_all, decode_lzma_all, sota_obj)
         roundtrip_check("lzma_extreme (synthetic)", encode_lzma_extreme, decode_lzma_extreme, sota_obj)
+        roundtrip_check("lzma_typegroup (synthetic)", encode_lzma_typegroup, decode_lzma_typegroup, sota_obj)
     else:
         print("  SKIP: zstandard not installed")
 
@@ -180,6 +183,7 @@ def test_real_roundtrip() -> None:
     roundtrip_check("lzma_streams (real)", encode_lzma_streams, decode_lzma_streams, sota_obj)
     roundtrip_check("lzma_all (real)", encode_lzma_all, decode_lzma_all, sota_obj)
     roundtrip_check("lzma_extreme (real)", encode_lzma_extreme, decode_lzma_extreme, sota_obj)
+    roundtrip_check("lzma_typegroup (real)", encode_lzma_typegroup, decode_lzma_typegroup, sota_obj)
 
 
 def main() -> None:
