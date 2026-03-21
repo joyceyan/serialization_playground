@@ -1,87 +1,55 @@
-# Serialization Optimization for Parameter Golf
+# Serialization Optimization
 
 ## Goal
 
-Beat the baseline serialization (`torch.save` + `zstd-22`) by producing a smaller compressed artifact while preserving dequantization accuracy.
+Beat `torch.save` + `zstd-22` on compressed size while preserving lossless roundtrip accuracy.
 
-## Context
+## Baseline
 
-The Parameter Golf competition stores models as quantized tensors + metadata, compressed with zlib or zstd. The current pipeline:
+The baseline serializes a dict of torch tensors:
+```python
+buf = io.BytesIO()
+torch.save({"w": tensor_dict, "m": metadata_dict}, buf)
+compressed = zstandard.ZstdCompressor(level=22).compress(buf.getvalue())
+```
 
-1. **Quantize**: float32/bf16 weights → int8 per-row (large 2D tensors) or per-tensor (vectors)
-2. **Pack**: Python dict with `quantized`, `scales`, `passthrough`, `dtypes`, `qmeta` keys
-3. **Serialize**: `pickle.dumps(dict)` or `torch.save(dict, buf)`
-4. **Compress**: `zlib.compress(raw, 9)` or `zstandard.ZstdCompressor(level=22).compress(raw)`
-5. **Output**: Single `.ptz` file
+The input data is a dict `{"w": ..., "m": ...}` where:
+- `w` contains **int8 tensors** (quantized weights with values typically in [-32, 31] or [-127, 127]), **fp16 tensors** (per-row scales), and **fp32 tensors** (small control parameters)
+- `m` contains string/dict metadata describing each tensor's quantization type
 
-### Baseline artifact structure (9L, 512dim, MLX smoke test)
+## What to measure
 
-From analysis of a real artifact:
-- **Compressed**: ~8.4MB (zlib-9)
-- **Decompressed**: ~17.2MB
-- **Pickle overhead**: ~9KB (0.1%) — negligible
-- **Quantized int8 weights**: ~17.0MB (54 tensors, all int8)
-- **Scales (fp16)**: ~57KB
-- **Passthrough (fp32)**: ~82KB (control tensors: q_gain, attn_scale, mlp_scale, resid_mix, skip_weights)
-- **Compression ratio**: 2.03x
+For every scheme, report:
+1. **compressed_bytes** — final output size (the metric we're optimizing)
+2. **max_abs_error** — must be 0.0 for lossless schemes
+3. **encode_ms** / **decode_ms** — should remain reasonable (under a few seconds)
 
-### Key observation: weights don't use full int8 range
+## Ideas to explore
 
-Most block weights have actual ranges of [-28, 28] or smaller — well within int6 [-32, 31]. Only `tok_emb.weight` uses the full int8 range [-114, 122]. This means most weights waste 2+ bits per value in int8 containers.
+**Bit packing:**
+- True int6 bit-packing: pack 4 int6 values into 3 bytes instead of 4 int8 containers (25% raw savings)
+- Int5 packing for tensors with small value ranges (8 values → 5 bytes)
+- Mixed precision packing based on per-tensor value range analysis
+
+**Compression:**
+- Alternative compressors (brotli, lz4, etc.)
+- Delta encoding between rows before compression
+- Transpose matrices before compression (column-major may compress better)
+- Sort rows by scale value before compression
+- Separate compression streams per data type
+
+**Format:**
+- Custom binary format instead of pickle/torch.save (skip serialization overhead)
+- Pack fp16 scales into fewer bits (fp8 or int8 scales)
+- Deduplicate metadata strings
+
+**Speculative:**
+- Arithmetic/Huffman coding tuned to empirical weight distributions
+- Weight matrix SVD for near-zero singular values
 
 ## Test artifacts
 
-Use real artifacts from the parameter-golf-fork repo:
-- **MLX artifacts**: `/Users/jyan/src/parameter-golf-fork/logs/*.int8.ptz` (pickle + zlib format, converted to SOTA format via `load_and_convert`)
+Use real quantized model artifacts from:
+`/Users/jyan/src/parameter-golf-fork/logs/*.int8.ptz`
 
-## Experiment methodology
-
-### What to measure
-
-For every serialization scheme, report:
-1. **compressed_bytes**: Final compressed artifact size
-2. **raw_bytes**: Uncompressed payload size (before compression)
-3. **ratio**: Compression ratio (raw/compressed)
-4. **max_abs_error**: Maximum absolute error after dequantize roundtrip (0.0 for lossless schemes)
-5. **mean_abs_error**: Mean absolute error (for lossy schemes)
-6. **encode_time_ms**: Time to serialize + compress
-7. **decode_time_ms**: Time to decompress + deserialize + dequantize
-
-### Ideas to explore (ordered by expected impact)
-
-**High priority — bit packing:**
-- Re-quantize int8 weights to int6 [-32,31] for block weights (not embedding). Store in int8 containers — zlib/zstd will compress the zero high bits efficiently.
-- True int6 bit-packing: pack 4 int6 values into 3 bytes (24 bits). Saves 25% vs int8 containers before compression.
-- Int5 for weights with small ranges (e.g., proj weights [-12,16]). Pack 8 int5 values into 5 bytes.
-- Mixed precision: int5 for MLP proj, int6 for attn/MLP fc, int8 for embedding.
-
-**Medium priority — compression:**
-- Compare zlib-9 vs zstd at various levels (1-22)
-- Delta encoding between rows before compression (consecutive rows may be similar)
-- Transpose weight matrices before compression (column-major may compress better if adjacent rows share patterns)
-- Sort rows by scale value before compression
-
-**Lower priority — format:**
-- Custom binary header (tensor names, shapes, dtypes as fixed-size records) instead of pickle
-- Separate compression streams per tensor type (int5/int6/int8/fp16/fp32) — different compressors may suit different data
-- Pack scales into fewer bits (fp8 or even int8 scales)
-
-**Speculative:**
-- Arithmetic coding tuned to the empirical weight distribution
-- Huffman coding on quantized values
-- LZ4 or brotli as alternative compressors
-- Weight matrix SVD: store low-rank approximation for near-zero singular values
-
-## File structure
-
-- `serialize.py` — All serialization/deserialization implementations
-- `benchmark.py` — Loads real artifacts, runs all schemes, prints comparison table
-- `test_serialize.py` — Correctness tests (roundtrip accuracy, edge cases)
-- `notes.md` — Lab notebook with experiment results
-- `results.tsv` — Machine-readable results log
-
-## Important notes
-
-- The baseline uses `torch.save` + `zstd-22`. Our schemes must produce smaller output.
-- Any custom format needs a corresponding decoder. Keep decoders simple and fast.
-- Decompression speed is secondary to compressed size, but should remain reasonable (under a few seconds).
+These are loaded and converted to SOTA format via `serialize.load_and_convert()`.
