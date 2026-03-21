@@ -116,6 +116,7 @@ Approaches that HURT:
 - **Insight**: Splitting non-zero values into packed sign bits + absolute values compresses much better. Signs are ~50/50 → pack and compress efficiently. Absolute values are 93% = 1 → extremely compressible as a separate stream.
 
 ### Exp 22: Decompose abs into abs==1 mask + abs>1 values — KEPT (current best)
+(Also tested but not committed: ternary encoding, column-interleaving, delta filter on mask, LZMA param tuning, bz2 — all worse)
 - **Result**: 2,957,897 bytes (-10.7% vs baseline, -20K vs sign+abs)
 - **Insight**: 83.5% of non-zero abs values are exactly 1. Storing a bitmask for "is it 1?" and only the remaining values (16.5% of non-zero) saves 20KB. Total: 5 compressed streams for weights (zero-mask, signs, abs==1-mask, abs>1-values) + scales + passthrough + meta = 8 streams.
 
