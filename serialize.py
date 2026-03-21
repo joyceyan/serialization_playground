@@ -891,14 +891,17 @@ def encode_lzma_sparse(sota_obj: dict) -> bytes:
     q_raw = q_buf.getvalue()
     q_arr = np.frombuffer(q_raw, dtype=np.int8)
 
-    # Sparse encoding: bitmask + non-zero values
+    # Sparse encoding: bitmask + sign bits + absolute values
     nonzero_mask = (q_arr != 0)
     bitmask = np.packbits(nonzero_mask)
     nonzero_vals = q_arr[nonzero_mask]
+    signs = np.packbits((nonzero_vals < 0).astype(np.uint8))
+    absvals = np.abs(nonzero_vals).astype(np.uint8)
 
     # Compress streams
     mask_blob = lzma.compress(bitmask.tobytes(), preset=preset)
-    vals_blob = lzma.compress(nonzero_vals.tobytes(), preset=preset)
+    signs_blob = lzma.compress(signs.tobytes(), preset=preset)
+    abs_blob = lzma.compress(absvals.tobytes(), preset=preset)
     s_blob = lzma.compress(b"".join(s_parts), preset=preset) if s_parts else b""
     p_blob = lzma.compress(b"".join(p_parts), preset=preset) if p_parts else b""
     meta_blob = lzma.compress(pickle.dumps({
@@ -908,10 +911,10 @@ def encode_lzma_sparse(sota_obj: dict) -> bytes:
         "q_total": len(q_arr),
     }, protocol=pickle.HIGHEST_PROTOCOL), preset=preset)
 
-    # Pack: magic + [mask][vals][s][p][meta]
+    # Pack: magic + [mask][signs][abs][s][p][meta]
     out = io.BytesIO()
     out.write(b"S")  # magic for sparse
-    for blob in (mask_blob, vals_blob, s_blob, p_blob):
+    for blob in (mask_blob, signs_blob, abs_blob, s_blob, p_blob):
         out.write(struct.pack("<I", len(blob)))
         out.write(blob)
     out.write(meta_blob)
@@ -925,10 +928,10 @@ def decode_lzma_sparse(blob: bytes) -> dict:
 
     # Read compressed streams
     blobs = []
-    for _ in range(4):
+    for _ in range(5):
         slen = struct.unpack("<I", buf.read(4))[0]
         blobs.append(lzma.decompress(buf.read(slen)) if slen > 0 else b"")
-    mask_raw, vals_raw, s_raw, p_raw = blobs
+    mask_raw, signs_raw, abs_raw, s_raw, p_raw = blobs
     meta_obj = pickle.loads(lzma.decompress(buf.read()))
 
     m_meta = meta_obj["m"]
@@ -936,9 +939,13 @@ def decode_lzma_sparse(blob: bytes) -> dict:
     type_groups = meta_obj["type_groups"]
     q_total = meta_obj["q_total"]
 
-    # Reconstruct dense weight array from sparse
+    # Reconstruct dense weight array from sparse sign+abs
     bitmask = np.unpackbits(np.frombuffer(mask_raw, dtype=np.uint8))[:q_total]
-    nonzero_vals = np.frombuffer(vals_raw, dtype=np.int8)
+    n_nonzero = int(bitmask.sum())
+    signs = np.unpackbits(np.frombuffer(signs_raw, dtype=np.uint8))[:n_nonzero]
+    absvals = np.frombuffer(abs_raw, dtype=np.uint8)[:n_nonzero]
+    nonzero_vals = absvals.astype(np.int8)
+    nonzero_vals[signs.astype(bool)] = -nonzero_vals[signs.astype(bool)]
     q_dense = np.zeros(q_total, dtype=np.int8)
     q_dense[bitmask.astype(bool)] = nonzero_vals
 
