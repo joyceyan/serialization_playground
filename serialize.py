@@ -907,7 +907,14 @@ def encode_lzma_sparse(sota_obj: dict) -> bytes:
     abs_mask_blob = lzma.compress(abs_not_one_mask.tobytes(), preset=preset)
     abs_vals_blob = lzma.compress(abs_gt1_vals.tobytes(), preset=preset)
     s_blob = lzma.compress(b"".join(s_parts), preset=preset) if s_parts else b""
-    p_blob = lzma.compress(b"".join(p_parts), preset=preset) if p_parts else b""
+    # Byte-shuffle fp32 passthrough for better compression
+    p_raw = b"".join(p_parts)
+    if p_raw:
+        p_arr = np.frombuffer(p_raw, dtype=np.uint8)
+        p_shuffled = b"".join(p_arr[i::4].tobytes() for i in range(4))
+        p_blob = lzma.compress(p_shuffled, preset=preset)
+    else:
+        p_blob = b""
     meta_blob = lzma.compress(pickle.dumps({
         "m": m, "manifest": manifest,
         "type_groups": {k: [(n, list(a.shape)) for n, a in v]
@@ -935,7 +942,17 @@ def decode_lzma_sparse(blob: bytes) -> dict:
     for _ in range(6):
         slen = struct.unpack("<I", buf.read(4))[0]
         blobs.append(lzma.decompress(buf.read(slen)) if slen > 0 else b"")
-    mask_raw, signs_raw, abs_mask_raw, abs_vals_raw, s_raw, p_raw = blobs
+    mask_raw, signs_raw, abs_mask_raw, abs_vals_raw, s_raw, p_shuffled = blobs
+    # Un-shuffle fp32 passthrough
+    if p_shuffled:
+        p_arr = np.frombuffer(p_shuffled, dtype=np.uint8)
+        plane_size = len(p_arr) // 4
+        p_restored = np.empty(len(p_arr), dtype=np.uint8)
+        for i in range(4):
+            p_restored[i::4] = p_arr[i * plane_size:(i + 1) * plane_size]
+        p_raw = p_restored.tobytes()
+    else:
+        p_raw = b""
     meta_obj = pickle.loads(lzma.decompress(buf.read()))
 
     m_meta = meta_obj["m"]
