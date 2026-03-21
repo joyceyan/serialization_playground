@@ -25,4 +25,5 @@ exp22_abs_decompose	2957897	17178912	5.81	0.0	kept	Decompose abs into abs==1 mas
 exp23_various	-	-	-	-	reverted	Tested: ternary, zstd-for-mask, per-group, sorted — all worse or negligible
 exp24_bshuffle_pt	2951845	17178912	5.82	0.0	kept	Byte-shuffle fp32 passthrough (current best, -10.8%)
 exp25_sparse_sorted	2954777	17178912	5.81	0.0	reverted	Sparse without interleave (3KB worse)
-exp26_split_int8	2942309	17178912	5.83	0.0	kept	Separate int8 (tok_emb) from sparse int6 (current best, -11.1%)
+exp26_split_int8	2942309	17178912	5.83	0.0	kept	Separate int8 (tok_emb) from sparse int6
+exp28_combine_masks	2940113	17178912	5.84	0.0	kept	Combine zero_mask + abs_mask into single LZMA stream (current best, -11.2%)
