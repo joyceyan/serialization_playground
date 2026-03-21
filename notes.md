@@ -104,8 +104,30 @@ Phase 1 optimized against an MLX smoke-test artifact with 72.5% zero values and 
 
 **Current state**: 15,334,299 (-1.15%). The int8 stream is ~15.1MB and dominates. Need to find ways to make it more compressible.
 
+### Exp 11: Unsigned offset for int8 values — REVERTED
+**Result**: +577 bytes. No benefit.
+
+### Exp 11b: Adaptive zstd/zlib for int8 — REVERTED
+**Result**: zstd always wins. zlib never smaller on this data.
+
+### Exp 12: Ablation — remove transpose — REVERTED
+**Result**: +576 bytes. Transpose helps marginally.
+
+**Data analysis** (critical for future experiments):
+- 26.7M int8 values, per-value entropy = 4.67 bits
+- Theoretical min (entropy only) = 15,624,070 bytes
+- Current compressed = 15,334,299 bytes — **already 1.85% BELOW entropy floor**
+- This means zstd is exploiting positional correlations via LZ77
+- Adjacent value correlation: only 5% of adjacent pairs match
+- Distribution: peaked at 0 (8%), symmetric, Laplace-like decay
+
+**Key insight**: We're squeezing blood from a stone on the int8 stream. The remaining gains must come from:
+1. More compact metadata encoding (header is only 1.4KB though)
+2. Fundamentally different data representation (bit-packing, prediction + residual)
+3. Per-tensor custom encoding (avoid the one-size-fits-all approach)
+
 **Next ideas**:
-- Try zlib/deflate for int8 stream (different algorithm might find different patterns)
-- Offset int6 values to unsigned [0,63] — maybe helps zstd's match finding
-- Try sub-byte packing: pack 4 int6 values into 3 bytes
-- Analyze: what does the byte frequency distribution look like? How uniform is it?
+- Try per-tensor compression: compress each tensor individually with zstd-22 using a trained dict
+- Try bit-plane decomposition: extract bit 0, bit 1, ..., bit 5 separately
+- Try Burrows-Wheeler Transform (BWT) pre-filter before zstd
+- Try zstd with different search_log/hash_log for potentially more matches

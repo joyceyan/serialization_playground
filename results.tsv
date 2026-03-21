@@ -12,3 +12,4 @@ exp9_lzma_fp16	15334299	27006130	0.5679	0.0	kept	LZMA extreme for byte-shuffled 
 exp10_lzma_int8	15631066	27006130	0.5789	0.0	reverted	LZMA extreme for int8 stream (worse)
 exp11_unsigned_offset	15334876	27006130	0.5679	0.0	reverted	offset int8 to unsigned (+577b)
 exp11b_zlib_adaptive	15334299	27006130	0.5679	0.0	reverted	adaptive zstd/zlib (zstd always wins)
+exp12_no_transpose	15334875	27006130	0.5679	0.0	reverted	ablation: no transpose (+576b)
