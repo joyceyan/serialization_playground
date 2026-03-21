@@ -34,29 +34,6 @@ The input data is a dict `{"w": ..., "m": ...}` where:
 - `w` contains **int8 tensors** (quantized weights with values typically in [-32, 31] or [-127, 127]), **fp16 tensors** (per-row scales), and **fp32 tensors** (small control parameters)
 - `m` contains string/dict metadata describing each tensor's quantization type
 
-## Ideas to explore
-
-**Bit packing:**
-- True int6 bit-packing: pack 4 int6 values into 3 bytes instead of 4 int8 containers (25% raw savings)
-- Int5 packing for tensors with small value ranges (8 values → 5 bytes)
-- Mixed precision packing based on per-tensor value range analysis
-
-**Compression:**
-- Alternative compressors (brotli, lz4, etc.)
-- Delta encoding between rows before compression
-- Transpose matrices before compression (column-major may compress better)
-- Sort rows by scale value before compression
-- Separate compression streams per data type
-
-**Format:**
-- Custom binary format instead of pickle/torch.save (skip serialization overhead)
-- Pack fp16 scales into fewer bits (fp8 or int8 scales)
-- Deduplicate metadata strings
-
-**Speculative:**
-- Arithmetic/Huffman coding tuned to empirical weight distributions
-- Weight matrix SVD for near-zero singular values
-
 ## Research methodology
 
 **Isolate variables**: Make exactly one change per experiment. If you change the bit packing and the compressor at the same time, you won't know which one mattered.
