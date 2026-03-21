@@ -9,7 +9,6 @@ Read `program.md` for full setup and experiment methodology.
 - **Goal**: Minimize compressed artifact size vs the baseline (`torch.save` + `zstd-22`).
 - **Roundtrip correctness**: Every serialization scheme MUST produce identical dequantized tensors (or acceptably close — measure max absolute error).
 - **One change at a time**: Exactly one modification per experiment. Never combine changes.
-- **Venv**: Always use `source /Users/jyan/src/parameter-golf-fork/.venv/bin/activate &&` before python commands.
 - **Packages**: torch, numpy, zstandard, and stdlib. See requirements.txt.
 - **Test artifacts**: Use real artifacts from `/Users/jyan/src/parameter-golf-fork/logs/*.int8.ptz`.
 
@@ -19,8 +18,8 @@ Every iteration, follow these steps in order:
 
 1. **Read** `notes.md` and `results.tsv` to understand what's been tried.
 2. **Design** one experiment. Edit `serialize.py` to implement the new scheme.
-3. **Run tests**: `source /Users/jyan/src/parameter-golf-fork/.venv/bin/activate && python test_serialize.py`
-4. **Run benchmark**: `source /Users/jyan/src/parameter-golf-fork/.venv/bin/activate && python benchmark.py`
+3. **Run tests**: `python test_serialize.py`
+4. **Run benchmark**: `python benchmark.py`
 5. **Log to `results.tsv`** (tab-separated):
    ```
    experiment	compressed_bytes	raw_bytes	ratio	max_abs_error	description

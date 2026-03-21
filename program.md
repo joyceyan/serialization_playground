@@ -10,25 +10,19 @@ Do all of these steps immediately without asking for confirmation. You are fully
 
 This setup is **idempotent** — it can be re-run safely.
 
-1. **Activate the venv**:
-   ```bash
-   source /Users/jyan/src/parameter-golf-fork/.venv/bin/activate
-   ```
-   All subsequent commands must run inside this venv.
-
-2. **Read the codebase**: Read these files for full context:
+1. **Read the codebase**: Read these files for full context:
    - `serialize.py` — all serialization/deserialization implementations. This is the primary file you edit.
    - `benchmark.py` — loads real artifacts, runs all schemes, prints comparison table.
    - `test_serialize.py` — correctness tests (roundtrip accuracy).
 
 3. **Run tests** to confirm everything is working:
    ```bash
-   source /Users/jyan/src/parameter-golf-fork/.venv/bin/activate && cd /Users/jyan/src/serialization_playground && python test_serialize.py
+   cd /Users/jyan/src/serialization_playground && python test_serialize.py
    ```
 
 4. **Run the benchmark** to see the current baseline:
    ```bash
-   source /Users/jyan/src/parameter-golf-fork/.venv/bin/activate && cd /Users/jyan/src/serialization_playground && python benchmark.py
+   cd /Users/jyan/src/serialization_playground && python benchmark.py
    ```
 
 5. **Check for existing progress**: Read `results.tsv` and `notes.md` (if they have entries beyond the baseline). Review what's been tried and what to try next.
@@ -91,13 +85,13 @@ LOOP FOREVER:
 
 4. **Run tests**:
    ```bash
-   source /Users/jyan/src/parameter-golf-fork/.venv/bin/activate && cd /Users/jyan/src/serialization_playground && python test_serialize.py
+   cd /Users/jyan/src/serialization_playground && python test_serialize.py
    ```
    If tests fail, fix the issue before proceeding. If the approach is fundamentally broken, revert and try something else.
 
 5. **Run benchmark**:
    ```bash
-   source /Users/jyan/src/parameter-golf-fork/.venv/bin/activate && cd /Users/jyan/src/serialization_playground && python benchmark.py
+   cd /Users/jyan/src/serialization_playground && python benchmark.py
    ```
 
 6. **Record results** in `results.tsv` (tab-separated):
