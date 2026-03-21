@@ -10,4 +10,5 @@ exp7_sep_streams	3275790	17178912	5.25	0.0	kept	Separate zstd-22 streams per dat
 exp8_dict_streams	3379193	17178912	5.08	0.0	reverted	zstd dictionary for weight stream (32KB dict overhead)
 exp9_4stream	3278435	17178912	5.24	0.0	reverted	Split int6/int8 weights into separate streams
 exp10_lzma_streams	3272164	17178912	5.25	0.0	kept	LZMA for weight stream, zstd for scales/passthrough
-exp11_lzma_all	3267661	17178912	5.26	0.0	kept	LZMA for all streams (new best)
+exp11_lzma_all	3267661	17178912	5.26	0.0	kept	LZMA for all streams
+exp12_lzma_extreme	3257949	17178912	5.27	0.0	kept	LZMA extreme preset for all streams (new best)

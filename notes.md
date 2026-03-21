@@ -77,6 +77,9 @@ Approaches that HURT:
 ### Exp 10: LZMA for weight stream — KEPT (superseded by exp 11)
 - **Result**: 3,272,164 bytes (-1.2% vs baseline)
 
-### Exp 11: LZMA for ALL streams — KEPT (current best)
+### Exp 11: LZMA for ALL streams — KEPT (superseded by exp 12)
 - **Result**: 3,267,661 bytes (-1.3% vs baseline)
-- **Insight**: LZMA beats zstd on all data types, not just weights. Total savings: 42,869 bytes. Decode speed: 162ms (acceptable).
+
+### Exp 12: LZMA EXTREME preset for all streams — KEPT (current best)
+- **Result**: 3,257,949 bytes (-1.6% vs baseline)
+- **Insight**: PRESET_EXTREME squeezes ~10KB more out of LZMA. Encode is similar time, decode unchanged at 151ms.
