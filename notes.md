@@ -124,6 +124,10 @@ Approaches that HURT:
 - **Result**: 2,951,845 bytes (-10.8% vs baseline, -6K improvement)
 - **Insight**: Splitting fp32 into 4 byte planes (exponent bytes together, mantissa bytes together) compresses 6KB better.
 
+### Exp 26: Separate int8 (tok_emb) from sparse int6 encoding — KEPT (current best)
+- **Result**: 2,942,309 bytes (-11.1% vs baseline, -9.5K vs previous best)
+- **Insight**: tok_emb is 98.9% nonzero — sparse encoding wastes mask space on nearly-full bitmask. Compressing it directly with LZMA saves space AND removes large-value outliers from the abs>1 stream (abs>1 dropped from 351K to 19K compressed). Each stream becomes more homogeneous.
+
 ### Value distribution insight (from analysis)
 - 72.5% of int6 values are 0, 12.8% are +1, 12.8% are -1
 - Shannon entropy: 1.235 bits/value
