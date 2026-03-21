@@ -78,9 +78,14 @@ Phase 1 optimized against an MLX smoke-test artifact with 72.5% zero values and 
 
 **Status**: Current best is exp3 at 15,350,003 (-1.05%). Need fundamentally different approaches.
 
+### Exp 6: Fine-grained streams (int6_q, int8_q, int6_scale, etc.) — REVERTED
+
+**Hypothesis**: Separating int6 values ([-32,31]) from int8 values ([-127,127]) into separate streams would let zstd build better per-stream frequency tables.
+**Result**: 15,446,020 bytes (worse than exp3's 15,350,003). More streams = more zstd frame headers = more overhead.
+**Insight**: 3 streams (int8/fp16/fp32) is the sweet spot. More streams adds overhead that exceeds any distribution-matching benefit.
+
 **Next ideas**:
-- Try zstd with higher windowLog/chainLog parameters
-- Byte-shuffle fp16 scales (separate high/low bytes)
-- Analyze per-byte entropy of the int8 stream to find optimization targets
-- Try XOR-based delta between adjacent rows within each tensor
-- Try compressing without transpose to see if transpose is still helping
+- Pack int6 values (6 bits) into bytes more efficiently — 4 values in 3 bytes
+- Try zstd with enable_ldm (long distance matching)
+- Byte-shuffle fp16 data (separate high/low bytes)
+- Try without transpose (ablation to verify it still helps)
