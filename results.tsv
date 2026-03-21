@@ -15,3 +15,6 @@ exp12_lzma_extreme	3257949	17178912	5.27	0.0	kept	LZMA extreme preset for all st
 exp13_lzma_single	3269124	17178912	5.25	0.0	reverted	LZMA extreme single combined stream
 exp14_lzma_delta	3449705	17178912	4.98	0.0	reverted	LZMA with FILTER_DELTA for weight stream
 exp15_lzma_notrans	3283697	17178912	5.23	0.0	reverted	LZMA extreme without transpose
+exp16_bshuffle	3257957	17178912	5.27	0.0	reverted	Byte shuffle fp16 scales (8 bytes diff, not worth it)
+exp17_zigzag	3264981	17178912	5.26	0.0	reverted	Zigzag encoding for weights
+exp18_typegroup	3250029	17178912	5.29	0.0	kept	Group same tensor types across layers (current best)

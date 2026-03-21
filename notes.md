@@ -92,3 +92,19 @@ Approaches that HURT:
 
 ### Exp 15: LZMA extreme without transpose — REVERTED
 - **Result**: 3,283,697 bytes. Transpose helps LZMA by ~26KB. Column patterns still compress better.
+
+### Exp 16: Byte shuffle fp16 scales — REVERTED
+- **Result**: 3,257,957 bytes. Only 8 bytes diff from lzma_extreme. Scales too small (57KB) to matter.
+
+### Exp 17: Zigzag encoding for weights — REVERTED
+- **Result**: 3,264,981 bytes. Worse than signed representation. LZMA handles signed int8 well.
+
+### Exp 18: Group same tensor types across layers — KEPT (current best)
+- **Result**: 3,250,029 bytes (-1.8% vs baseline, -7,920 vs lzma_extreme)
+- **Insight**: Ordering tensors so all c_q.weight.q across layers are adjacent (instead of sorted by name) gives LZMA cross-layer patterns. Different layers' same-type weights share structural similarity.
+
+### Value distribution insight (from analysis)
+- 72.5% of int6 values are 0, 12.8% are +1, 12.8% are -1
+- Shannon entropy: 1.235 bits/value
+- Theoretical minimum: 2,548,860 bytes for weight data
+- ~700KB gap between LZMA output and theoretical minimum
