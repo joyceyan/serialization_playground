@@ -63,3 +63,9 @@ Phase 1 optimized against an MLX smoke-test artifact with 72.5% zero values and 
 **Hypothesis**: Grouping all int8 data together (removing pickle interleaving) gives zstd a contiguous block of similar data to compress. Combined with transpose and no pickle overhead.
 **Result**: 15,350,003 bytes (-163,028, -1.05%). Significant win!
 **Insight**: Stripping pickle overhead and grouping by dtype is the real win here, not just transpose. The int8 stream is 25.9MB of int6-range values — compressing it as one contiguous block lets zstd find much longer matches. Encode is actually faster too (15.9s vs 17.1s) since we avoid pickle serialization overhead.
+
+### Exp 4: Group tensors by type across layers — REVERTED
+
+**Hypothesis**: Grouping all c_q together, all c_k together, etc. would let zstd find more repeated patterns across layers.
+**Result**: 15,370,267 bytes (+20,264 vs exp3). Worse.
+**Insight**: Alphabetical ordering already groups similarly-named tensors. Reordering by type breaks the natural block-0, block-1, ... sequence that zstd was exploiting for cross-layer delta patterns.
