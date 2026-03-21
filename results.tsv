@@ -1,0 +1,2 @@
+experiment	compressed_bytes	raw_bytes	ratio	max_abs_error	description
+baseline_pickle_zlib9	8446420	17188361	2.03	0.0	pickle.dumps + zlib.compress(level=9)
