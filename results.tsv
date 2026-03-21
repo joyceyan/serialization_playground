@@ -1,2 +1,4 @@
 experiment	compressed_bytes	raw_bytes	ratio	max_abs_error	description
 baseline_torch_zstd22	3310530	17178912	5.19	0.0	torch.save + zstd-22 (SOTA pipeline, 9L MLX artifact re-quantized to int6)
+exp3_transpose	3288084	17178912	5.23	0.0	Transpose 2D weight matrices — KEPT
+exp7_sep_streams	3275790	17178912	5.25	0.0	Separate zstd-22 streams per data type + transpose — KEPT (new best)

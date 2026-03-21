@@ -44,3 +44,15 @@ See program.md for full list.
 - **Hypothesis**: Packing int6 values into 6 bits each (25% raw savings) will reduce compressed size.
 - **Result**: 3,638,084 bytes (+327,554 / +9.9% WORSE). Reverted.
 - **Insight**: Bit-packing destroys byte-aligned patterns that zstd-22 exploits very efficiently. With values mostly in [-7,7], each int8 byte has lots of redundant high bits that zstd compresses away. Bit-packing scrambles these patterns. **Key lesson: work WITH the compressor, not against it.**
+
+### Experiment 3: Transpose weight matrices before compression
+- **Result**: 3,288,084 bytes (-22,446 / -0.7%). KEPT.
+
+### Experiment 4: Sort rows by scale value + transpose — REVERTED (worse than transpose alone)
+### Experiment 5: Delta encoding + transpose — REVERTED (+33.4% worse, columns not correlated)
+### Experiment 6: Concatenate homogeneous tensors — REVERTED (worse than transpose alone)
+
+### Experiment 7: Separate zstd-22 streams per data type + transpose
+- **Hypothesis**: Compressing int8 weights, fp16 scales, and passthrough each independently gives each stream its own entropy model.
+- **Result**: 3,275,790 bytes (-34,740 / -1.0%). KEPT — new best.
+- **Insight**: Separate streams DO help. Each data type has a distinct distribution. The per-stream entropy coding is more efficient than one-stream-fits-all. This replaces transpose_v1 as the best scheme.
