@@ -27,4 +27,5 @@ exp24_bshuffle_pt	2951845	17178912	5.82	0.0	kept	Byte-shuffle fp32 passthrough (
 exp25_sparse_sorted	2954777	17178912	5.81	0.0	reverted	Sparse without interleave (3KB worse)
 exp26_split_int8	2942309	17178912	5.83	0.0	kept	Separate int8 (tok_emb) from sparse int6
 exp28_combine_masks	2940113	17178912	5.84	0.0	kept	Combine zero_mask + abs_mask into single LZMA stream
-exp29_combine_misc	2940053	17178912	5.84	0.0	kept	Combine int8+scales+passthrough into single misc stream (current best, -11.2%)
+exp29_combine_misc	2940053	17178912	5.84	0.0	kept	Combine int8+scales+passthrough into single misc stream
+exp30_lzma_raw	2939762	17178912	5.84	0.0	kept	Use LZMA RAW format (no XZ container) (current best, -11.2%)

@@ -128,9 +128,16 @@ Approaches that HURT:
 - **Result**: 2,942,309 bytes (-11.1% vs baseline, -9.5K vs previous best)
 - **Insight**: tok_emb is 98.9% nonzero — sparse encoding wastes mask space on nearly-full bitmask. Compressing it directly with LZMA saves space AND removes large-value outliers from the abs>1 stream (abs>1 dropped from 351K to 19K compressed). Each stream becomes more homogeneous.
 
-### Exp 28: Combine zero_mask + abs_mask into single LZMA stream — KEPT (current best)
+### Exp 28: Combine zero_mask + abs_mask into single LZMA stream — KEPT
 - **Result**: 2,940,113 bytes (-11.2% vs baseline, -2.2K vs split_int8)
 - **Insight**: Both masks are binary data with similar statistics. LZMA finds cross-mask patterns when concatenated in one stream, saving one header (~32 bytes) plus better context modeling.
+
+### Exp 29: Combine int8+scales+passthrough into single misc stream — KEPT
+- **Result**: 2,940,053 bytes (saved 60 bytes)
+
+### Exp 30: Use LZMA RAW format (no XZ container overhead) — KEPT (current best)
+- **Result**: 2,939,762 bytes (-11.2% vs baseline)
+- **Insight**: XZ container adds ~32 bytes per stream. LZMA RAW has ~1 byte overhead. With 5 streams, saves ~155 bytes. Also decode is slightly faster (no XZ header parsing).
 
 ### Exp 27 (exploration): Various mask/int8 optimizations — all REVERTED
 - XOR prediction on zero mask: all strides worse (+173K to +212K)
