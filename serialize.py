@@ -845,8 +845,9 @@ def encode_lzma_sparse(sota_obj: dict) -> bytes:
     m = sota_obj["m"]
     preset = 9 | lzma.PRESET_EXTREME
 
-    # Build interleaved q stream
-    type_groups = {}
+    # Build interleaved q stream, separating int8 (dense) from int6 (sparse)
+    type_groups = {}  # int6 tensors grouped by type
+    int8_parts = []   # int8 tensors compressed directly
     s_parts = []
     p_parts = []
     manifest = []
@@ -856,11 +857,19 @@ def encode_lzma_sparse(sota_obj: dict) -> bytes:
         arr = t.numpy() if isinstance(t, torch.Tensor) else np.asarray(t)
 
         if name.endswith(".q"):
-            suffix_match = re.match(r"blocks\.\d+\.(.*)", name)
-            suffix = suffix_match.group(1) if suffix_match else name
-            if suffix not in type_groups:
-                type_groups[suffix] = []
-            type_groups[suffix].append((name, arr))
+            base_name = name[:-2]
+            info = m.get(base_name, {})
+            is_int8 = isinstance(info, dict) and info.get("type") == "int8"
+            if is_int8:
+                arr_t = arr.T.copy() if arr.ndim == 2 else arr
+                manifest.append((name, str(arr.dtype), list(t.shape), arr_t.nbytes, "q8"))
+                int8_parts.append(arr_t.tobytes())
+            else:
+                suffix_match = re.match(r"blocks\.\d+\.(.*)", name)
+                suffix = suffix_match.group(1) if suffix_match else name
+                if suffix not in type_groups:
+                    type_groups[suffix] = []
+                type_groups[suffix].append((name, arr))
         elif name.endswith(".scale"):
             manifest.append((name, str(arr.dtype), list(t.shape), arr.nbytes, "s"))
             s_parts.append(arr.tobytes())
@@ -869,7 +878,7 @@ def encode_lzma_sparse(sota_obj: dict) -> bytes:
             manifest.append((name, str(arr.dtype), list(t.shape), arr_t.nbytes, "p"))
             p_parts.append(arr_t.tobytes())
 
-    # Build interleaved weight bytes
+    # Build interleaved int6 weight bytes
     q_buf = io.BytesIO()
     for suffix in sorted(type_groups.keys()):
         group = type_groups[suffix]
@@ -881,12 +890,12 @@ def encode_lzma_sparse(sota_obj: dict) -> bytes:
                     q_buf.write(arr[row].tobytes())
             for name, arr in group:
                 manifest.append((name, str(arr.dtype), list(arr.shape),
-                                arr.T.shape[0] * arr.T.shape[1], "q"))
+                                arr.T.shape[0] * arr.T.shape[1], "q6"))
         else:
             for name, arr in group:
                 arr_t = arr.T.copy() if arr.ndim == 2 else arr
                 q_buf.write(arr_t.tobytes())
-                manifest.append((name, str(arr.dtype), list(arr.shape), arr_t.nbytes, "q"))
+                manifest.append((name, str(arr.dtype), list(arr.shape), arr_t.nbytes, "q6"))
 
     q_raw = q_buf.getvalue()
     q_arr = np.frombuffer(q_raw, dtype=np.int8)
@@ -906,6 +915,7 @@ def encode_lzma_sparse(sota_obj: dict) -> bytes:
     signs_blob = lzma.compress(signs.tobytes(), preset=preset)
     abs_mask_blob = lzma.compress(abs_not_one_mask.tobytes(), preset=preset)
     abs_vals_blob = lzma.compress(abs_gt1_vals.tobytes(), preset=preset)
+    q8_blob = lzma.compress(b"".join(int8_parts), preset=preset) if int8_parts else b""
     s_blob = lzma.compress(b"".join(s_parts), preset=preset) if s_parts else b""
     # Byte-shuffle fp32 passthrough for better compression
     p_raw = b"".join(p_parts)
@@ -919,13 +929,13 @@ def encode_lzma_sparse(sota_obj: dict) -> bytes:
         "m": m, "manifest": manifest,
         "type_groups": {k: [(n, list(a.shape)) for n, a in v]
                        for k, v in type_groups.items()},
-        "q_total": len(q_arr),
+        "q6_total": len(q_arr),
     }, protocol=pickle.HIGHEST_PROTOCOL), preset=preset)
 
-    # Pack: magic + [mask][signs][abs_mask][abs_vals][s][p][meta]
+    # Pack: magic + [mask][signs][abs_mask][abs_vals][q8][s][p][meta]
     out = io.BytesIO()
     out.write(b"S")  # magic for sparse
-    for blob in (mask_blob, signs_blob, abs_mask_blob, abs_vals_blob, s_blob, p_blob):
+    for blob in (mask_blob, signs_blob, abs_mask_blob, abs_vals_blob, q8_blob, s_blob, p_blob):
         out.write(struct.pack("<I", len(blob)))
         out.write(blob)
     out.write(meta_blob)
@@ -939,10 +949,10 @@ def decode_lzma_sparse(blob: bytes) -> dict:
 
     # Read compressed streams
     blobs = []
-    for _ in range(6):
+    for _ in range(7):
         slen = struct.unpack("<I", buf.read(4))[0]
         blobs.append(lzma.decompress(buf.read(slen)) if slen > 0 else b"")
-    mask_raw, signs_raw, abs_mask_raw, abs_vals_raw, s_raw, p_shuffled = blobs
+    mask_raw, signs_raw, abs_mask_raw, abs_vals_raw, q8_raw, s_raw, p_shuffled = blobs
     # Un-shuffle fp32 passthrough
     if p_shuffled:
         p_arr = np.frombuffer(p_shuffled, dtype=np.uint8)
@@ -958,10 +968,10 @@ def decode_lzma_sparse(blob: bytes) -> dict:
     m_meta = meta_obj["m"]
     manifest = meta_obj["manifest"]
     type_groups = meta_obj["type_groups"]
-    q_total = meta_obj["q_total"]
+    q6_total = meta_obj["q6_total"]
 
-    # Reconstruct dense weight array from sparse sign+abs decomposition
-    bitmask = np.unpackbits(np.frombuffer(mask_raw, dtype=np.uint8))[:q_total]
+    # Reconstruct dense int6 weight array from sparse sign+abs decomposition
+    bitmask = np.unpackbits(np.frombuffer(mask_raw, dtype=np.uint8))[:q6_total]
     n_nonzero = int(bitmask.sum())
     signs = np.unpackbits(np.frombuffer(signs_raw, dtype=np.uint8))[:n_nonzero]
     not_one = np.unpackbits(np.frombuffer(abs_mask_raw, dtype=np.uint8))[:n_nonzero]
@@ -973,15 +983,24 @@ def decode_lzma_sparse(blob: bytes) -> dict:
 
     nonzero_vals = absvals.astype(np.int8)
     nonzero_vals[signs.astype(bool)] = -nonzero_vals[signs.astype(bool)]
-    q_dense = np.zeros(q_total, dtype=np.int8)
-    q_dense[bitmask.astype(bool)] = nonzero_vals
+    q6_dense = np.zeros(q6_total, dtype=np.int8)
+    q6_dense[bitmask.astype(bool)] = nonzero_vals
 
-    # Decode scale and passthrough
+    # Decode scale, passthrough, and int8 streams
     w = {}
     s_offset = 0
     p_offset = 0
+    q8_offset = 0
     for name, dtype_str, shape, nbytes, stream in manifest:
-        if stream == "s":
+        if stream == "q8":
+            dt = np.dtype(dtype_str)
+            if len(shape) == 2:
+                arr = np.frombuffer(q8_raw[q8_offset:q8_offset + nbytes], dtype=dt).reshape(shape[1], shape[0]).T.copy()
+            else:
+                arr = np.frombuffer(q8_raw[q8_offset:q8_offset + nbytes], dtype=dt).reshape(shape).copy()
+            w[name] = torch.from_numpy(arr)
+            q8_offset += nbytes
+        elif stream == "s":
             dt = np.dtype(dtype_str)
             arr = np.frombuffer(s_raw[s_offset:s_offset + nbytes], dtype=dt).reshape(shape).copy()
             w[name] = torch.from_numpy(arr)
@@ -995,8 +1014,8 @@ def decode_lzma_sparse(blob: bytes) -> dict:
             w[name] = torch.from_numpy(arr)
             p_offset += nbytes
 
-    # De-interleave q stream
-    q_buf = io.BytesIO(q_dense.tobytes())
+    # De-interleave int6 q stream
+    q_buf = io.BytesIO(q6_dense.tobytes())
     for suffix in sorted(type_groups.keys()):
         group = type_groups[suffix]
         shapes = set(tuple(s) for _, s in group)
