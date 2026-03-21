@@ -135,7 +135,7 @@ Approaches that HURT:
 ### Exp 29: Combine int8+scales+passthrough into single misc stream — KEPT
 - **Result**: 2,940,053 bytes (saved 60 bytes)
 
-### Exp 30: Use LZMA RAW format (no XZ container overhead) — KEPT (current best)
+### Exp 30: Use LZMA RAW format (no XZ container overhead) — KEPT (FINAL BEST)
 - **Result**: 2,939,762 bytes (-11.2% vs baseline)
 - **Insight**: XZ container adds ~32 bytes per stream. LZMA RAW has ~1 byte overhead. With 5 streams, saves ~155 bytes. Also decode is slightly faster (no XZ header parsing).
 
