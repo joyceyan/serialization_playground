@@ -12,20 +12,14 @@ This setup is **idempotent** — it can be re-run safely.
 
 1. **Read the codebase**: Read these files for full context:
    - `serialize.py` — all serialization/deserialization implementations. This is the primary file you edit.
-   - `benchmark.py` — loads real artifacts, runs all schemes, prints comparison table.
-   - `test_serialize.py` — correctness tests (roundtrip accuracy).
+   - `test_serialize.py` — correctness tests + benchmarks (roundtrip accuracy, compressed size, timing).
 
 3. **Run tests** to confirm everything is working:
    ```bash
    cd /Users/jyan/src/serialization_playground && python test_serialize.py
    ```
 
-4. **Run the benchmark** to see the current baseline:
-   ```bash
-   cd /Users/jyan/src/serialization_playground && python benchmark.py
-   ```
-
-5. **Check for existing progress**: Read `results.tsv` and `notes.md` (if they have entries beyond the baseline). Review what's been tried and what to try next.
+4. **Check for existing progress**: Read `results.tsv` and `notes.md` (if they have entries beyond the baseline). Review what's been tried and what to try next.
 
 ## Baseline
 
@@ -83,32 +77,27 @@ LOOP FOREVER:
 
 3. `git commit -am "description of experiment"`
 
-4. **Run tests**:
+4. **Run tests + benchmark**:
    ```bash
    cd /Users/jyan/src/serialization_playground && python test_serialize.py
    ```
    If tests fail, fix the issue before proceeding. If the approach is fundamentally broken, revert and try something else.
 
-5. **Run benchmark**:
-   ```bash
-   cd /Users/jyan/src/serialization_playground && python benchmark.py
-   ```
-
-6. **Record results** in `results.tsv` (tab-separated, with status column):
+5. **Record results** in `results.tsv` (tab-separated, with status column):
    ```
    experiment	compressed_bytes	raw_bytes	ratio	max_abs_error	status	description
    ```
    The `status` column must be one of: `baseline`, `kept`, or `reverted`.
 
-7. **Update `notes.md`**: Append an entry to the "Experiment log" with the hypothesis, result, and insights. Do this for every experiment — successes and failures both contain useful information.
+6. **Update `notes.md`**: Append an entry to the "Experiment log" with the hypothesis, result, and insights. Do this for every experiment — successes and failures both contain useful information.
    - **Mark kept/reverted clearly** in each entry heading (e.g., "### Exp 8: ... — KEPT" or "— REVERTED").
    - **Update the "Ideas queue"**: Add new ideas sparked by this experiment. Remove ideas you just tried.
 
-8. **Keep/discard decision**:
+7. **Keep/discard decision**:
    - If compressed_bytes **decreased** with acceptable roundtrip error (0.0 for lossless): keep the commit.
    - If compressed_bytes is **equal or worse**: `git reset --hard HEAD~1` to revert.
 
-9. Go back to step 1.
+8. Go back to step 1.
 
 **NEVER STOP**: Once the experiment loop has begun, do NOT pause to ask the human if you should continue. The human might be away and expects you to continue working indefinitely until manually stopped. You are autonomous. If you run out of ideas, think harder — re-read the benchmark output, analyze the data distribution, try combining near-misses, try more radical approaches. The loop runs until the human interrupts you, period.
 
