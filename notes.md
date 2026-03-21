@@ -69,4 +69,11 @@ Approaches that HURT:
 
 ### Exp 8: zstd dictionary for weight stream — REVERTED
 - **Result**: 3,379,193 bytes (+2.1% worse)
-- **Insight**: 32KB dictionary overhead not recovered. zstd already learns patterns well within a single stream.
+- **Insight**: 32KB dictionary overhead not recovered.
+
+### Exp 9: 4-stream split int6/int8 weights — REVERTED
+- **Result**: 3,278,435 bytes. Barely different from 3-stream, extra header overhead.
+
+### Exp 10: LZMA for weight stream — KEPT (new best)
+- **Result**: 3,272,164 bytes (-1.2% vs baseline, -3,626 vs sep_streams)
+- **Insight**: LZMA2 achieves slightly better ratio than zstd-22 for int8 weight data. Slower decode (157ms vs 24ms) but acceptable.
