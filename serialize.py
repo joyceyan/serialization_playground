@@ -338,9 +338,7 @@ def encode_lzma_streams(sota_obj: dict) -> bytes:
             p_parts.append(arr.tobytes())
 
     # LZMA for weight stream (best ratio), zstd for small streams
-    q_blob = lzma.compress(b"".join(q_parts),
-                           format=lzma.FORMAT_RAW,
-                           filters=[{"id": lzma.FILTER_LZMA2, "preset": 9}])
+    q_blob = lzma.compress(b"".join(q_parts), preset=9)
     s_blob = cctx.compress(b"".join(s_parts)) if s_parts else b""
     p_blob = cctx.compress(b"".join(p_parts)) if p_parts else b""
     meta_blob = cctx.compress(pickle.dumps({"m": m, "manifest": manifest},
@@ -369,9 +367,7 @@ def decode_lzma_streams(blob: bytes) -> dict:
 
     # Weight stream: LZMA
     q_len = struct.unpack("<I", buf.read(4))[0]
-    q_raw = lzma.decompress(buf.read(q_len),
-                            format=lzma.FORMAT_RAW,
-                            filters=[{"id": lzma.FILTER_LZMA2}])
+    q_raw = lzma.decompress(buf.read(q_len))
 
     # Scale and passthrough: zstd
     s_len = struct.unpack("<I", buf.read(4))[0]
