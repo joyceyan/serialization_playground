@@ -145,38 +145,103 @@ def decode_baseline(blob: bytes) -> tuple[dict[str, Tensor], dict[str, object]]:
 
 
 # ==============================================================================
-# EXPERIMENT: transpose 2D tensors + zstd-22
+# EXPERIMENT: separate streams by dtype, transpose, zstd-22
 # ==============================================================================
 
+def _sorted_keys(d):
+    return sorted(d.keys())
+
+
 def encode_experiment(quant_result: dict[str, Tensor], quant_meta: dict[str, object]) -> bytes:
-    """Transpose 2D tensors before torch.save + zstd-22."""
+    """Separate int8/fp16/fp32 into distinct streams, transpose 2D, zstd-22 each."""
     if not HAS_ZSTD:
         raise ImportError("zstandard not installed")
-    transposed = {}
-    for k, v in quant_result.items():
-        if v.ndim == 2:
-            transposed[k] = v.t().contiguous()
+    comp = zstandard.ZstdCompressor(level=22)
+
+    # Classify tensors into streams by dtype
+    int8_keys = []
+    fp16_keys = []
+    fp32_keys = []
+    for k in _sorted_keys(quant_result):
+        t = quant_result[k]
+        if t.dtype == torch.int8:
+            int8_keys.append(k)
+        elif t.dtype == torch.float16:
+            fp16_keys.append(k)
         else:
-            transposed[k] = v
-    buf = io.BytesIO()
-    torch.save({"w": transposed, "m": quant_meta}, buf)
-    raw = buf.getvalue()
-    return zstandard.ZstdCompressor(level=22).compress(raw)
+            fp32_keys.append(k)
+
+    # Build raw byte streams — transpose 2D tensors
+    streams = {}
+    for label, keys in [("int8", int8_keys), ("fp16", fp16_keys), ("fp32", fp32_keys)]:
+        parts = []
+        for k in keys:
+            t = quant_result[k]
+            if t.ndim == 2:
+                t = t.t().contiguous()
+            parts.append(t.numpy().tobytes())
+        if parts:
+            streams[label] = comp.compress(b"".join(parts))
+
+    # Encode metadata: key lists + shapes + quant_meta
+    header = pickle.dumps({
+        "int8_keys": int8_keys,
+        "fp16_keys": fp16_keys,
+        "fp32_keys": fp32_keys,
+        "shapes": {k: list(quant_result[k].shape) for k in _sorted_keys(quant_result)},
+        "meta": quant_meta,
+    })
+    header_c = comp.compress(header)
+
+    # Pack: [header_len(4)] [header_compressed] [int8_len(4)] [int8_compressed] [fp16_len(4)] [fp16_compressed] [fp32_compressed]
+    out = struct.pack("<I", len(header_c)) + header_c
+    for label in ["int8", "fp16", "fp32"]:
+        blob = streams.get(label, b"")
+        out += struct.pack("<I", len(blob)) + blob
+    return out
 
 
 def decode_experiment(blob: bytes) -> tuple[dict[str, Tensor], dict[str, object]]:
-    """Decode transposed tensors."""
+    """Decode separate-stream format."""
     if not HAS_ZSTD:
         raise ImportError("zstandard not installed")
-    raw = zstandard.ZstdDecompressor().decompress(blob)
-    obj = torch.load(io.BytesIO(raw), map_location="cpu", weights_only=False)
+    decomp = zstandard.ZstdDecompressor()
+
+    off = 0
+    def read_block():
+        nonlocal off
+        sz = struct.unpack_from("<I", blob, off)[0]
+        off += 4
+        data = blob[off:off + sz]
+        off += sz
+        return data
+
+    header = pickle.loads(decomp.decompress(read_block()))
+    int8_raw = decomp.decompress(read_block()) if header["int8_keys"] else b""
+    fp16_raw = decomp.decompress(read_block()) if header["fp16_keys"] else b""
+    fp32_raw = decomp.decompress(read_block()) if header["fp32_keys"] else b""
+
+    dtype_map = {"int8": (torch.int8, int8_raw, np.int8),
+                 "fp16": (torch.float16, fp16_raw, np.float16),
+                 "fp32": (torch.float32, fp32_raw, np.float32)}
+
     w = {}
-    for k, v in obj["w"].items():
-        if v.ndim == 2:
-            w[k] = v.t().contiguous()
-        else:
-            w[k] = v
-    return w, obj["m"]
+    offsets = {"int8": 0, "fp16": 0, "fp32": 0}
+    for label, keys in [("int8", header["int8_keys"]), ("fp16", header["fp16_keys"]), ("fp32", header["fp32_keys"])]:
+        dt, raw, npdt = dtype_map[label]
+        for k in keys:
+            shape = header["shapes"][k]
+            numel = 1
+            for s in shape:
+                numel *= s
+            nbytes = numel * np.dtype(npdt).itemsize
+            arr = np.frombuffer(raw, dtype=npdt, count=numel, offset=offsets[label])
+            offsets[label] += nbytes
+            t = torch.from_numpy(arr.copy()).reshape(shape)
+            if t.ndim == 2:
+                t = t.t().contiguous()
+            w[k] = t
+    return w, header["meta"]
 
 
 # ==============================================================================
