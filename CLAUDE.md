@@ -8,7 +8,6 @@ Read `program.md` for full setup and experiment methodology.
 
 - **Goal**: Minimize compressed artifact size vs the baseline (`torch.save` + `zstd-22`).
 - **Roundtrip correctness**: Every serialization scheme MUST produce identical dequantized tensors (or acceptably close — measure max absolute error).
-- **One change at a time**: Exactly one modification per experiment. Never combine changes.
 - **Packages**: torch, numpy, zstandard, and stdlib. See requirements.txt.
 - **Test artifact**: `final_model.pt` (H100 unquantized state dict). Loaded and quantized via `serialize.load_and_quantize()`.
 

@@ -36,8 +36,6 @@ The input data is a dict `{"w": ..., "m": ...}` where:
 
 ## Research methodology
 
-**Isolate variables**: Make exactly one change per experiment. If you change the bit packing and the compressor at the same time, you won't know which one mattered.
-
 **Ablations**: When a complex change improves results, strip parts away to find the essential ingredient.
 
 **Diminishing returns**: If the last 5 experiments were all minor tweaks with tiny deltas, change strategy entirely.
