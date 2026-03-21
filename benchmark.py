@@ -22,11 +22,13 @@ from serialize import (
     HAS_ZSTD,
     decode_baseline,
     decode_lzma_all,
+    decode_lzma_extreme,
     decode_lzma_streams,
     decode_separate_streams,
     decode_transpose_v1,
     encode_baseline,
     encode_lzma_all,
+    encode_lzma_extreme,
     encode_lzma_streams,
     encode_separate_streams,
     encode_transpose_v1,
@@ -159,6 +161,7 @@ def main() -> None:
         ("sep_streams", encode_separate_streams, decode_separate_streams),
         ("lzma_streams", encode_lzma_streams, decode_lzma_streams),
         ("lzma_all", encode_lzma_all, decode_lzma_all),
+        ("lzma_extreme", encode_lzma_extreme, decode_lzma_extreme),
     ]
 
     # Run benchmarks
