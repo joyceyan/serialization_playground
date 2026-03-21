@@ -74,6 +74,9 @@ Approaches that HURT:
 ### Exp 9: 4-stream split int6/int8 weights — REVERTED
 - **Result**: 3,278,435 bytes. Barely different from 3-stream, extra header overhead.
 
-### Exp 10: LZMA for weight stream — KEPT (new best)
-- **Result**: 3,272,164 bytes (-1.2% vs baseline, -3,626 vs sep_streams)
-- **Insight**: LZMA2 achieves slightly better ratio than zstd-22 for int8 weight data. Slower decode (157ms vs 24ms) but acceptable.
+### Exp 10: LZMA for weight stream — KEPT (superseded by exp 11)
+- **Result**: 3,272,164 bytes (-1.2% vs baseline)
+
+### Exp 11: LZMA for ALL streams — KEPT (current best)
+- **Result**: 3,267,661 bytes (-1.3% vs baseline)
+- **Insight**: LZMA beats zstd on all data types, not just weights. Total savings: 42,869 bytes. Decode speed: 162ms (acceptable).
