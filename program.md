@@ -2,7 +2,7 @@
 
 ## Goal
 
-Minimize the compressed artifact size of a quantized GPT model while preserving dequantization accuracy. Every byte saved under the 16MB cap can fund more model parameters (wider MLP, more layers, larger BigramHash).
+Beat the baseline serialization (`torch.save` + `zstd-22`) by producing a smaller compressed artifact while preserving dequantization accuracy. Every byte saved means more room for model parameters in the competition.
 
 ## Context
 
@@ -12,7 +12,7 @@ The Parameter Golf competition stores models as quantized tensors + metadata, co
 2. **Pack**: Python dict with `quantized`, `scales`, `passthrough`, `dtypes`, `qmeta` keys
 3. **Serialize**: `pickle.dumps(dict)` or `torch.save(dict, buf)`
 4. **Compress**: `zlib.compress(raw, 9)` or `zstandard.ZstdCompressor(level=22).compress(raw)`
-5. **Output**: Single `.ptz` file, must be < 16MB including code
+5. **Output**: Single `.ptz` file
 
 ### Baseline artifact structure (9L, 512dim, MLX smoke test)
 

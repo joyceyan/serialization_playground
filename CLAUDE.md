@@ -6,8 +6,7 @@ Read `program.md` for full setup and experiment methodology.
 
 ## Critical constraints
 
-- **Goal**: Minimize compressed artifact size while preserving model quality (lossless dequantization accuracy).
-- **Artifact limit**: compressed model + code must be < 16,000,000 bytes (16MB).
+- **Goal**: Minimize compressed artifact size vs the baseline (`torch.save` + `zstd-22`). Every byte saved here means more room for model parameters in the competition.
 - **Roundtrip correctness**: Every serialization scheme MUST produce identical dequantized tensors (or acceptably close — measure max absolute error).
 - **One change at a time**: Exactly one modification per experiment. Never combine changes.
 - **Venv**: Always use `source /Users/jyan/src/parameter-golf-fork/.venv/bin/activate &&` before python commands.
