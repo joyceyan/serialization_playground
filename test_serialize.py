@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Correctness tests for serialization schemes.
+Correctness tests for serialization schemes (SOTA format).
 
 Usage:
     source /Users/jyan/src/parameter-golf-fork/.venv/bin/activate
@@ -12,14 +12,14 @@ from __future__ import annotations
 import os
 import sys
 import numpy as np
+import torch
 
 from serialize import (
     HAS_ZSTD,
     decode_baseline,
-    decode_zstd22,
     encode_baseline,
-    encode_zstd22,
-    load_artifact,
+    load_and_convert,
+    mlx_to_sota_format,
 )
 
 ARTIFACT_DIR = "/Users/jyan/src/parameter-golf-fork/logs"
@@ -46,108 +46,126 @@ def roundtrip_check(
     scheme_name: str,
     encode_fn,
     decode_fn,
-    quant_obj: dict,
+    sota_obj: dict,
     max_allowed_error: float = 0.0,
 ) -> None:
     """Test that encode → decode produces identical (or acceptably close) output."""
     print(f"\n--- {scheme_name} ---")
 
-    blob = encode_fn(quant_obj)
-    check(f"encode produces bytes", isinstance(blob, bytes) and len(blob) > 0)
+    blob = encode_fn(sota_obj)
+    check("encode produces bytes", isinstance(blob, bytes) and len(blob) > 0)
 
     decoded = decode_fn(blob)
-    check(f"decode produces dict", isinstance(decoded, dict))
+    check("decode produces dict", isinstance(decoded, dict))
+    check("has 'w' key", "w" in decoded)
+    check("has 'm' key", "m" in decoded)
 
-    # Check all quantized tensors
-    for key in quant_obj.get("quantized", {}):
-        orig = np.asarray(quant_obj["quantized"][key])
-        check(f"quantized/{key} present", key in decoded.get("quantized", {}),
-              f"missing from decoded")
-        if key not in decoded.get("quantized", {}):
+    orig_w = sota_obj["w"]
+    decoded_w = decoded.get("w", {})
+    orig_m = sota_obj["m"]
+    decoded_m = decoded.get("m", {})
+
+    # Check all tensors in w
+    for key in orig_w:
+        check(f"w/{key} present", key in decoded_w, f"missing from decoded")
+        if key not in decoded_w:
             continue
-        rt = np.asarray(decoded["quantized"][key])
-        check(f"quantized/{key} shape", orig.shape == rt.shape,
-              f"shape mismatch: {orig.shape} vs {rt.shape}")
-        if orig.shape == rt.shape:
-            max_err = float(np.abs(orig.astype(np.float32) - rt.astype(np.float32)).max())
-            check(f"quantized/{key} roundtrip (max_err={max_err:.6f})",
+        orig_np = orig_w[key].numpy() if isinstance(orig_w[key], torch.Tensor) else np.asarray(orig_w[key])
+        rt_np = decoded_w[key].numpy() if isinstance(decoded_w[key], torch.Tensor) else np.asarray(decoded_w[key])
+        check(f"w/{key} shape", orig_np.shape == rt_np.shape,
+              f"shape mismatch: {orig_np.shape} vs {rt_np.shape}")
+        if orig_np.shape == rt_np.shape:
+            max_err = float(np.abs(orig_np.astype(np.float32) - rt_np.astype(np.float32)).max())
+            check(f"w/{key} roundtrip (max_err={max_err:.6f})",
                   max_err <= max_allowed_error,
                   f"max_err={max_err:.6f} > {max_allowed_error}")
 
-    # Check all scales
-    for key in quant_obj.get("scales", {}):
-        orig = np.asarray(quant_obj["scales"][key])
-        check(f"scales/{key} present", key in decoded.get("scales", {}))
-        if key not in decoded.get("scales", {}):
-            continue
-        rt = np.asarray(decoded["scales"][key])
-        max_err = float(np.abs(orig.astype(np.float32) - rt.astype(np.float32)).max())
-        check(f"scales/{key} roundtrip (max_err={max_err:.6f})",
-              max_err <= max_allowed_error)
-
-    # Check all passthrough tensors
-    for key in quant_obj.get("passthrough", {}):
-        orig = np.asarray(quant_obj["passthrough"][key])
-        check(f"passthrough/{key} present", key in decoded.get("passthrough", {}))
-        if key not in decoded.get("passthrough", {}):
-            continue
-        rt = np.asarray(decoded["passthrough"][key])
-        max_err = float(np.abs(orig.astype(np.float32) - rt.astype(np.float32)).max())
-        check(f"passthrough/{key} roundtrip (max_err={max_err:.6f})",
-              max_err <= max_allowed_error)
-
-    # Check metadata preserved
-    for meta_key in ["dtypes", "qmeta", "passthrough_orig_dtypes"]:
-        if meta_key in quant_obj:
-            check(f"{meta_key} preserved", meta_key in decoded,
-                  f"missing from decoded")
-            if meta_key in decoded:
-                check(f"{meta_key} matches", quant_obj[meta_key] == decoded[meta_key],
-                      f"content mismatch")
+    # Check metadata
+    check("metadata keys match", set(orig_m.keys()) == set(decoded_m.keys()),
+          f"orig={set(orig_m.keys())} decoded={set(decoded_m.keys())}")
+    for key in orig_m:
+        if key in decoded_m:
+            check(f"m/{key} matches", orig_m[key] == decoded_m[key],
+                  f"{orig_m[key]} vs {decoded_m[key]}")
 
 
 def test_synthetic() -> None:
-    """Test with a synthetic small artifact."""
-    print("\n=== Synthetic artifact tests ===")
+    """Test with a synthetic small artifact in SOTA format."""
+    print("\n=== Synthetic SOTA format tests ===")
 
-    quant_obj = {
-        "__quant_format__": "int8_clean_per_row_v1",
-        "quantized": {
-            "layer.weight": np.random.randint(-20, 20, size=(64, 32), dtype=np.int8),
+    sota_obj = {
+        "w": {
+            "blocks.0.attn.c_q.weight.q": torch.randint(-20, 20, size=(64, 32), dtype=torch.int8),
+            "blocks.0.attn.c_q.weight.scale": torch.from_numpy(np.random.uniform(0.001, 0.1, size=(64,)).astype(np.float16)),
+            "blocks.0.resid_mix": torch.randn(2, 32, dtype=torch.float32),
         },
-        "scales": {
-            "layer.weight": np.random.uniform(0.001, 0.1, size=(64,)).astype(np.float16),
+        "m": {
+            "blocks.0.attn.c_q.weight": {"type": "int6"},
+            "blocks.0.resid_mix": "passthrough_ctrl",
         },
-        "dtypes": {"layer.weight": "bfloat16"},
-        "passthrough": {
-            "bias": np.random.randn(32).astype(np.float32),
-        },
-        "qmeta": {"layer.weight": {"scheme": "per_row", "axis": 0}},
-        "passthrough_orig_dtypes": {},
     }
 
-    roundtrip_check("baseline (synthetic)", encode_baseline, decode_baseline, quant_obj)
     if HAS_ZSTD:
-        roundtrip_check("zstd-22 (synthetic)", encode_zstd22, decode_zstd22, quant_obj)
+        roundtrip_check("baseline (synthetic)", encode_baseline, decode_baseline, sota_obj)
+    else:
+        print("  SKIP: zstandard not installed")
 
 
-def test_real_artifact() -> None:
-    """Test with a real artifact from training."""
-    print("\n=== Real artifact tests ===")
+def test_sota_conversion() -> None:
+    """Test MLX → SOTA format conversion."""
+    print("\n=== MLX → SOTA conversion tests ===")
 
     if not os.path.exists(DEFAULT_ARTIFACT):
         print(f"  SKIP: artifact not found at {DEFAULT_ARTIFACT}")
         return
 
-    quant_obj = load_artifact(DEFAULT_ARTIFACT)
-    roundtrip_check("baseline (real)", encode_baseline, decode_baseline, quant_obj)
-    if HAS_ZSTD:
-        roundtrip_check("zstd-22 (real)", encode_zstd22, decode_zstd22, quant_obj)
+    sota_obj = load_and_convert(DEFAULT_ARTIFACT)
+    check("conversion produces dict", isinstance(sota_obj, dict))
+    check("has 'w' key", "w" in sota_obj)
+    check("has 'm' key", "m" in sota_obj)
+
+    w = sota_obj["w"]
+    m = sota_obj["m"]
+
+    # Check int6 tensors have correct range
+    for name, info in m.items():
+        if isinstance(info, dict) and info.get("type") == "int6":
+            t = w[name + ".q"]
+            lo, hi = int(t.min()), int(t.max())
+            check(f"{name} int6 range", lo >= -32 and hi <= 31,
+                  f"range [{lo}, {hi}] exceeds int6 [-32, 31]")
+
+    # Check int8 tensors exist
+    for name, info in m.items():
+        if isinstance(info, dict) and info.get("type") == "int8":
+            check(f"{name} has .q", name + ".q" in w)
+            check(f"{name} has .scale", name + ".scale" in w)
+
+    # tok_emb should be int8 (needs full range)
+    check("tok_emb is int8", m.get("tok_emb.weight", {}) == {"type": "int8"},
+          f"got {m.get('tok_emb.weight')}")
+
+
+def test_real_roundtrip() -> None:
+    """Test full roundtrip with a real artifact."""
+    print("\n=== Real artifact roundtrip tests ===")
+
+    if not os.path.exists(DEFAULT_ARTIFACT):
+        print(f"  SKIP: artifact not found at {DEFAULT_ARTIFACT}")
+        return
+
+    if not HAS_ZSTD:
+        print("  SKIP: zstandard not installed")
+        return
+
+    sota_obj = load_and_convert(DEFAULT_ARTIFACT)
+    roundtrip_check("baseline (real)", encode_baseline, decode_baseline, sota_obj)
 
 
 def main() -> None:
     test_synthetic()
-    test_real_artifact()
+    test_sota_conversion()
+    test_real_roundtrip()
 
     print(f"\n{'='*40}")
     print(f"Results: {PASS} passed, {FAIL} failed")

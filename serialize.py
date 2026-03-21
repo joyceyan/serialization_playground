@@ -1,17 +1,16 @@
 """
 Serialization schemes for Parameter Golf model artifacts.
 
-Each scheme implements:
-  - encode(quant_obj) -> bytes  (serialize + compress)
-  - decode(blob) -> quant_obj   (decompress + deserialize)
+Matches the train_gpt_sota.py pipeline exactly:
+  - Quantization: mixed_quantize_int6 (int6 for attn+MLP, int8 for embedding)
+  - Serialization: torch.save({"w": result, "m": meta}, buf)
+  - Compression: zstd-22
 
-The quant_obj is the standard dict with keys:
-  quantized: dict[str, np.ndarray]   # int8 weight tensors
-  scales: dict[str, np.ndarray]      # fp16 per-row scales
-  dtypes: dict[str, str]             # original dtype names
-  passthrough: dict[str, np.ndarray] # small fp32/fp16 tensors
-  qmeta: dict[str, dict]            # quantization metadata
-  passthrough_orig_dtypes: dict[str, str]  # original dtypes for passthrough
+The sota_obj format (what gets serialized) has keys:
+  "w": dict of torch tensors — includes "name.q" (int8), "name.scale" (fp16),
+       and passthrough tensors (fp16/fp32)
+  "m": dict of metadata — per-tensor: "passthrough", "passthrough_ctrl",
+       {"type": "int6"}, or {"type": "int8"}
 """
 
 from __future__ import annotations
@@ -24,6 +23,7 @@ import zlib
 from typing import Any
 
 import numpy as np
+import torch
 
 try:
     import zstandard
@@ -33,55 +33,155 @@ except ImportError:
 
 
 # ==============================================================================
-# BASELINE: pickle + zlib (matches current MLX pipeline)
+# CONTROL TENSOR PATTERNS (from train_gpt_sota.py)
 # ==============================================================================
 
-def encode_baseline(quant_obj: dict) -> bytes:
-    """Baseline: pickle + zlib-9. Matches the current MLX training script."""
-    raw = pickle.dumps(quant_obj, protocol=pickle.HIGHEST_PROTOCOL)
-    return zlib.compress(raw, 9)
-
-
-def decode_baseline(blob: bytes) -> dict:
-    """Baseline decoder."""
-    return pickle.loads(zlib.decompress(blob))
+CONTROL_TENSOR_NAME_PATTERNS = (
+    "attn_scale", "attn_scales", "mlp_scale", "mlp_scales",
+    "resid_mix", "resid_mixes", "q_gain", "skip_weight", "skip_weights", "smear",
+)
 
 
 # ==============================================================================
-# SCHEME 1: pickle + zstd-22 (matches current H100 pipeline)
+# CONVERT MLX ARTIFACT → SOTA FORMAT
 # ==============================================================================
 
-def encode_zstd22(quant_obj: dict) -> bytes:
-    """pickle + zstd-22. Used by top H100 submissions."""
+def _classify_param(name: str) -> str:
+    """Classify a parameter name into embed/mlp/attn/other (from train_gpt_sota.py)."""
+    if "tok_emb" in name or "lm_head" in name:
+        return "embed"
+    if ".mlp." in name:
+        return "mlp"
+    if ".attn." in name or (".proj." in name and ".mlp." not in name):
+        return "attn"
+    return "other"
+
+
+def quantize_int6_per_row(arr: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Quantize to int6 [-32, 31] stored in int8 containers."""
+    f32 = arr.astype(np.float32)
+    if f32.ndim == 2:
+        row_max = np.abs(f32).max(axis=1)
+        scale = np.maximum(row_max / 31.0, 1.0 / 31.0).astype(np.float16)
+        q = np.clip(np.round(f32 / scale.astype(np.float32)[:, None]), -32, 31).astype(np.int8)
+        return q, scale
+    amax = float(np.abs(f32).max())
+    scale = np.array(amax / 31.0 if amax > 0 else 1.0, dtype=np.float16)
+    q = np.clip(np.round(f32 / float(scale)), -32, 31).astype(np.int8)
+    return q, scale
+
+
+def quantize_int8_per_row(arr: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Quantize to int8 [-127, 127] with per-row scale."""
+    f32 = arr.astype(np.float32)
+    clip_q = 99.99984 / 100.0
+    if f32.ndim == 2:
+        clip_abs = np.quantile(np.abs(f32), clip_q, axis=1) if f32.size else np.empty((f32.shape[0],), dtype=np.float32)
+        clipped = np.clip(f32, -clip_abs[:, None], clip_abs[:, None])
+        scale = np.maximum(clip_abs / 127.0, 1.0 / 127.0).astype(np.float16)
+        q = np.clip(np.round(clipped / scale.astype(np.float32)[:, None]), -127, 127).astype(np.int8)
+        return q, scale
+    clip_abs = float(np.quantile(np.abs(f32).flatten(), clip_q)) if f32.size else 0.0
+    scale = np.array(clip_abs / 127.0 if clip_abs > 0 else 1.0, dtype=np.float16)
+    q = np.clip(np.round(np.clip(f32, -clip_abs, clip_abs) / float(scale)), -127, 127).astype(np.int8)
+    return q, scale
+
+
+def mlx_to_sota_format(mlx_obj: dict, int6_cats: set[str] = {"mlp", "attn"}) -> dict:
+    """
+    Convert an MLX-format quant_obj to the SOTA format used by train_gpt_sota.py.
+
+    MLX format: separate "quantized", "scales", "passthrough" dicts with original tensor names.
+    SOTA format: {"w": {name.q, name.scale, passthrough_names}, "m": {name: metadata}}.
+
+    For block weights: re-quantize from int8 to int6 (lossy — clamps values outside [-32,31]).
+    For embedding: keep as int8.
+    For passthrough: keep as-is.
+    """
+    result = {}
+    meta = {}
+
+    # Re-quantize the int8 weights into mixed int6/int8
+    for name in mlx_obj.get("quantized", {}):
+        arr_int8 = np.asarray(mlx_obj["quantized"][name])
+        scale_orig = np.asarray(mlx_obj["scales"][name])
+        cat = _classify_param(name)
+
+        # Dequantize back to float first
+        if scale_orig.ndim > 0:
+            f32 = arr_int8.astype(np.float32) * scale_orig.astype(np.float32).reshape(arr_int8.shape[0], *([1] * (arr_int8.ndim - 1)))
+        else:
+            f32 = arr_int8.astype(np.float32) * float(scale_orig)
+
+        if cat in int6_cats:
+            q, s = quantize_int6_per_row(f32)
+            result[name + ".q"] = torch.from_numpy(q)
+            result[name + ".scale"] = torch.from_numpy(s)
+            meta[name] = {"type": "int6"}
+        else:
+            q, s = quantize_int8_per_row(f32)
+            result[name + ".q"] = torch.from_numpy(q)
+            result[name + ".scale"] = torch.from_numpy(s)
+            meta[name] = {"type": "int8"}
+
+    # Passthrough tensors
+    for name in mlx_obj.get("passthrough", {}):
+        arr = np.asarray(mlx_obj["passthrough"][name])
+        if any(p in name for p in CONTROL_TENSOR_NAME_PATTERNS):
+            result[name] = torch.from_numpy(arr.astype(np.float32))
+            meta[name] = "passthrough_ctrl"
+        else:
+            t = torch.from_numpy(arr.astype(np.float16) if arr.dtype in (np.float32, np.float64) else arr.copy())
+            result[name] = t
+            meta[name] = "passthrough"
+
+    return {"w": result, "m": meta}
+
+
+# ==============================================================================
+# BASELINE: torch.save + zstd-22 (matches train_gpt_sota.py pipeline)
+# ==============================================================================
+
+def encode_baseline(sota_obj: dict) -> bytes:
+    """Baseline: torch.save + zstd-22. Matches train_gpt_sota.py exactly."""
     if not HAS_ZSTD:
         raise ImportError("zstandard not installed")
-    raw = pickle.dumps(quant_obj, protocol=pickle.HIGHEST_PROTOCOL)
+    buf = io.BytesIO()
+    torch.save(sota_obj, buf)
+    raw = buf.getvalue()
     return zstandard.ZstdCompressor(level=22).compress(raw)
 
 
-def decode_zstd22(blob: bytes) -> dict:
-    """zstd-22 decoder."""
+def decode_baseline(blob: bytes) -> dict:
+    """Baseline decoder: zstd decompress + torch.load."""
     if not HAS_ZSTD:
         raise ImportError("zstandard not installed")
-    return pickle.loads(zstandard.ZstdDecompressor().decompress(blob))
+    raw = zstandard.ZstdDecompressor().decompress(blob)
+    return torch.load(io.BytesIO(raw), map_location="cpu", weights_only=False)
 
 
 # ==============================================================================
 # HELPERS
 # ==============================================================================
 
-def load_artifact(path: str) -> dict:
-    """Load a .int8.ptz artifact (pickle + zlib format)."""
+def load_mlx_artifact(path: str) -> dict:
+    """Load an MLX .int8.ptz artifact (pickle + zlib format)."""
     with open(path, "rb") as f:
         blob = f.read()
     return pickle.loads(zlib.decompress(blob))
+
+
+def load_and_convert(path: str) -> dict:
+    """Load MLX artifact and convert to SOTA format."""
+    mlx_obj = load_mlx_artifact(path)
+    return mlx_to_sota_format(mlx_obj)
 
 
 def measure_scheme(
     name: str,
     encode_fn,
     decode_fn,
-    quant_obj: dict,
+    sota_obj: dict,
     n_trials: int = 3,
 ) -> dict:
     """Benchmark a serialization scheme. Returns metrics dict."""
@@ -89,7 +189,7 @@ def measure_scheme(
     encode_times = []
     for _ in range(n_trials):
         t0 = time.perf_counter()
-        blob = encode_fn(quant_obj)
+        blob = encode_fn(sota_obj)
         encode_times.append(1000.0 * (time.perf_counter() - t0))
 
     compressed_bytes = len(blob)
@@ -101,31 +201,29 @@ def measure_scheme(
         decoded = decode_fn(blob)
         decode_times.append(1000.0 * (time.perf_counter() - t0))
 
-    # Roundtrip accuracy
+    # Roundtrip accuracy on the "w" dict
     max_abs_error = 0.0
     mean_abs_error = 0.0
     total_values = 0
-    for key in quant_obj.get("quantized", {}):
-        orig = np.asarray(quant_obj["quantized"][key])
-        rt = np.asarray(decoded["quantized"][key])
-        diff = np.abs(orig.astype(np.float32) - rt.astype(np.float32))
+
+    orig_w = sota_obj.get("w", {})
+    decoded_w = decoded.get("w", {})
+    for key in orig_w:
+        orig = orig_w[key]
+        rt = decoded_w.get(key)
+        if rt is None:
+            max_abs_error = float("inf")
+            continue
+        # Convert to numpy for comparison (handles both torch.Tensor and np.ndarray)
+        orig_np = orig.numpy() if isinstance(orig, torch.Tensor) else np.asarray(orig)
+        rt_np = rt.numpy() if isinstance(rt, torch.Tensor) else np.asarray(rt)
+        if orig_np.shape != rt_np.shape:
+            max_abs_error = float("inf")
+            continue
+        diff = np.abs(orig_np.astype(np.float32) - rt_np.astype(np.float32))
         max_abs_error = max(max_abs_error, float(diff.max()))
         mean_abs_error += float(diff.sum())
-        total_values += orig.size
-    for key in quant_obj.get("passthrough", {}):
-        orig = np.asarray(quant_obj["passthrough"][key]).astype(np.float32)
-        rt = np.asarray(decoded["passthrough"][key]).astype(np.float32)
-        diff = np.abs(orig - rt)
-        max_abs_error = max(max_abs_error, float(diff.max()))
-        mean_abs_error += float(diff.sum())
-        total_values += orig.size
-    for key in quant_obj.get("scales", {}):
-        orig = np.asarray(quant_obj["scales"][key]).astype(np.float32)
-        rt = np.asarray(decoded["scales"][key]).astype(np.float32)
-        diff = np.abs(orig - rt)
-        max_abs_error = max(max_abs_error, float(diff.max()))
-        mean_abs_error += float(diff.sum())
-        total_values += orig.size
+        total_values += orig_np.size
 
     if total_values > 0:
         mean_abs_error /= total_values

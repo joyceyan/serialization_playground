@@ -2,34 +2,32 @@
 
 ## Baseline analysis
 
-Artifact: `f3ffa88d-62a7-4575-8c89-0ef6a07eb11a_mlx_model.int8.ptz` (9L, 512dim, MLP2x, MLX smoke test)
+Source: MLX artifact re-quantized to SOTA format (mixed int6/int8 + zstd-22).
+This simulates the `train_gpt_sota.py` pipeline: `mixed_quantize_int6` → `torch.save` → `zstd-22`.
 
-| Metric | Value |
-|--------|-------|
-| Compressed (zlib-9) | 8,446,420 bytes |
-| Decompressed (pickle) | 17,188,361 bytes |
-| Pickle overhead | 9,449 bytes (0.1%) |
-| Quantized int8 | 17,039,360 bytes (54 tensors) |
-| Scales (fp16) | 57,344 bytes |
-| Passthrough (fp32) | 82,208 bytes |
-| Compression ratio | 2.03x |
+### SOTA pipeline (train_gpt_sota.py lines 991-1022, 1459-1464)
 
-### Weight value ranges (int8 quantized)
+1. `mixed_quantize_int6(state_dict, {"mlp", "attn"})` — int6 for MLP+attn, int8 for embedding
+2. Result format: `{"w": {name.q, name.scale, passthrough}, "m": {name: metadata}}`
+3. `torch.save({"w": result, "m": meta}, buf)` — pickle-based serialization
+4. `zstandard.ZstdCompressor(level=22).compress(raw)` — zstd compression
 
-Block weights (attn + MLP) typically use [-28, 28] range — fits in int6 [-32, 31].
-- `attn.c_q/c_k` weights: [-14, 15] range — fits in int5 [-16, 15]
-- `attn.c_v/proj` weights: [-25, 22] range — fits in int6
-- `mlp.fc` weights: [-28, 25] range — fits in int6
-- `mlp.proj` weights: [-13, 16] range — fits in int5 [-16, 15]
-- `tok_emb.weight`: [-114, 122] range — needs int8
+### Weight value ranges after int6 re-quantization
+
+Block weights (int6): actual range [-32, 31] but most values within [-20, 20].
+- `attn.c_q/c_k` weights: typically [-12, 12] → could fit int5 [-16, 15]
+- `attn.c_v/proj` weights: typically [-20, 20] → needs int6
+- `mlp.fc` weights: typically [-25, 25] → needs int6
+- `mlp.proj` weights: typically [-12, 12] → could fit int5 [-16, 15]
+- `tok_emb.weight` (int8): [-114, 122] → needs int8
 
 ### Bit budget analysis
 
-With 17,039,360 int8 bytes across 54 tensors:
-- If all block weights re-quantized to int6 in int8 containers: same raw size, but zlib/zstd compresses better (zero high bits)
-- True int6 bit-packing (4 values → 3 bytes): raw size drops to ~12.8MB
-- Mixed int5/int6: MLP proj + attn q/k could use int5 (5 bits), saving more
-- Embedding stays int8 (needs full range)
+For an 11L SOTA model (~26.8M params, ~15.5MB compressed):
+- Int6 values stored in int8 containers waste 2 bits per value
+- True int6 bit-packing (4 values → 3 bytes): 25% reduction in raw weight bytes
+- Mixed int5/int6: additional savings for small-range tensors
+- zstd-22 already exploits some of this redundancy, but true bit-packing gives it denser input
 
 ## Ideas queue
 
