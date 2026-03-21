@@ -120,6 +120,7 @@ Approaches that HURT:
 - **Insight**: 83.5% of non-zero abs values are exactly 1. Storing a bitmask for "is it 1?" and only the remaining values (16.5% of non-zero) saves 20KB. Total: 5 compressed streams for weights (zero-mask, signs, abs==1-mask, abs>1-values) + scales + passthrough + meta = 8 streams.
 
 ### Exp 24: Byte-shuffle fp32 passthrough — KEPT (current best)
+(Exp 25: sparse sorted — 3KB worse, reverted. Exp 23/26: various explorations — all worse or negligible)
 - **Result**: 2,951,845 bytes (-10.8% vs baseline, -6K improvement)
 - **Insight**: Splitting fp32 into 4 byte planes (exponent bytes together, mantissa bytes together) compresses 6KB better.
 
