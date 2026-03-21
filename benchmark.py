@@ -24,6 +24,7 @@ from serialize import (
     decode_lzma_all,
     decode_lzma_extreme,
     decode_lzma_interleave,
+    decode_lzma_sparse,
     decode_lzma_streams,
     decode_lzma_typegroup,
     decode_separate_streams,
@@ -32,6 +33,7 @@ from serialize import (
     encode_lzma_all,
     encode_lzma_extreme,
     encode_lzma_interleave,
+    encode_lzma_sparse,
     encode_lzma_streams,
     encode_lzma_typegroup,
     encode_separate_streams,
@@ -168,6 +170,7 @@ def main() -> None:
         ("lzma_extreme", encode_lzma_extreme, decode_lzma_extreme),
         ("lzma_typegroup", encode_lzma_typegroup, decode_lzma_typegroup),
         ("lzma_interleave", encode_lzma_interleave, decode_lzma_interleave),
+        ("lzma_sparse", encode_lzma_sparse, decode_lzma_sparse),
     ]
 
     # Run benchmarks

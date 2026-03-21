@@ -15,6 +15,7 @@ The sota_obj format (what gets serialized) has keys:
 
 from __future__ import annotations
 
+import bz2
 import io
 import lzma
 import pickle
@@ -817,6 +818,164 @@ def decode_lzma_interleave(blob: bytes) -> dict:
             interleaved = interleaved.reshape(n_rows, n_tensors, n_cols)
             for i, (name, _) in enumerate(group):
                 arr = interleaved[:, i, :].T.copy()  # un-transpose
+                w[name] = torch.from_numpy(arr)
+        else:
+            for name, shape in group:
+                nbytes = 1
+                for s in shape:
+                    nbytes *= s
+                raw_bytes = q_buf.read(nbytes)
+                if len(shape) == 2:
+                    arr = np.frombuffer(raw_bytes, dtype=np.int8).reshape(shape[1], shape[0]).T.copy()
+                else:
+                    arr = np.frombuffer(raw_bytes, dtype=np.int8).reshape(shape).copy()
+                w[name] = torch.from_numpy(arr)
+
+    return {"w": w, "m": m_meta}
+
+
+# ==============================================================================
+# EXPERIMENT: Sparse representation + LZMA extreme + interleave
+# Store bitmask (zero/nonzero) + only non-zero values separately.
+# ==============================================================================
+
+def encode_lzma_sparse(sota_obj: dict) -> bytes:
+    """LZMA extreme with sparse representation for weight stream."""
+    w = sota_obj["w"]
+    m = sota_obj["m"]
+    preset = 9 | lzma.PRESET_EXTREME
+
+    # Build interleaved q stream
+    type_groups = {}
+    s_parts = []
+    p_parts = []
+    manifest = []
+
+    for name in sorted(w.keys()):
+        t = w[name]
+        arr = t.numpy() if isinstance(t, torch.Tensor) else np.asarray(t)
+
+        if name.endswith(".q"):
+            suffix_match = re.match(r"blocks\.\d+\.(.*)", name)
+            suffix = suffix_match.group(1) if suffix_match else name
+            if suffix not in type_groups:
+                type_groups[suffix] = []
+            type_groups[suffix].append((name, arr))
+        elif name.endswith(".scale"):
+            manifest.append((name, str(arr.dtype), list(t.shape), arr.nbytes, "s"))
+            s_parts.append(arr.tobytes())
+        else:
+            arr_t = arr.T.copy() if arr.ndim == 2 else arr
+            manifest.append((name, str(arr.dtype), list(t.shape), arr_t.nbytes, "p"))
+            p_parts.append(arr_t.tobytes())
+
+    # Build interleaved weight bytes
+    q_buf = io.BytesIO()
+    for suffix in sorted(type_groups.keys()):
+        group = type_groups[suffix]
+        shapes = set(arr.shape for _, arr in group)
+        if len(shapes) == 1 and group[0][1].ndim == 2:
+            arrays = [arr.T for _, arr in group]
+            for row in range(arrays[0].shape[0]):
+                for arr in arrays:
+                    q_buf.write(arr[row].tobytes())
+            for name, arr in group:
+                manifest.append((name, str(arr.dtype), list(arr.shape),
+                                arr.T.shape[0] * arr.T.shape[1], "q"))
+        else:
+            for name, arr in group:
+                arr_t = arr.T.copy() if arr.ndim == 2 else arr
+                q_buf.write(arr_t.tobytes())
+                manifest.append((name, str(arr.dtype), list(arr.shape), arr_t.nbytes, "q"))
+
+    q_raw = q_buf.getvalue()
+    q_arr = np.frombuffer(q_raw, dtype=np.int8)
+
+    # Sparse encoding: bitmask + non-zero values
+    nonzero_mask = (q_arr != 0)
+    bitmask = np.packbits(nonzero_mask)
+    nonzero_vals = q_arr[nonzero_mask]
+
+    # Compress streams
+    mask_blob = lzma.compress(bitmask.tobytes(), preset=preset)
+    vals_blob = lzma.compress(nonzero_vals.tobytes(), preset=preset)
+    s_blob = lzma.compress(b"".join(s_parts), preset=preset) if s_parts else b""
+    p_blob = lzma.compress(b"".join(p_parts), preset=preset) if p_parts else b""
+    meta_blob = lzma.compress(pickle.dumps({
+        "m": m, "manifest": manifest,
+        "type_groups": {k: [(n, list(a.shape)) for n, a in v]
+                       for k, v in type_groups.items()},
+        "q_total": len(q_arr),
+    }, protocol=pickle.HIGHEST_PROTOCOL), preset=preset)
+
+    # Pack: magic + [mask][vals][s][p][meta]
+    out = io.BytesIO()
+    out.write(b"S")  # magic for sparse
+    for blob in (mask_blob, vals_blob, s_blob, p_blob):
+        out.write(struct.pack("<I", len(blob)))
+        out.write(blob)
+    out.write(meta_blob)
+    return out.getvalue()
+
+
+def decode_lzma_sparse(blob: bytes) -> dict:
+    """Decode sparse LZMA format."""
+    buf = io.BytesIO(blob)
+    assert buf.read(1) == b"S"
+
+    # Read compressed streams
+    blobs = []
+    for _ in range(4):
+        slen = struct.unpack("<I", buf.read(4))[0]
+        blobs.append(lzma.decompress(buf.read(slen)) if slen > 0 else b"")
+    mask_raw, vals_raw, s_raw, p_raw = blobs
+    meta_obj = pickle.loads(lzma.decompress(buf.read()))
+
+    m_meta = meta_obj["m"]
+    manifest = meta_obj["manifest"]
+    type_groups = meta_obj["type_groups"]
+    q_total = meta_obj["q_total"]
+
+    # Reconstruct dense weight array from sparse
+    bitmask = np.unpackbits(np.frombuffer(mask_raw, dtype=np.uint8))[:q_total]
+    nonzero_vals = np.frombuffer(vals_raw, dtype=np.int8)
+    q_dense = np.zeros(q_total, dtype=np.int8)
+    q_dense[bitmask.astype(bool)] = nonzero_vals
+
+    # Decode scale and passthrough
+    w = {}
+    s_offset = 0
+    p_offset = 0
+    for name, dtype_str, shape, nbytes, stream in manifest:
+        if stream == "s":
+            dt = np.dtype(dtype_str)
+            arr = np.frombuffer(s_raw[s_offset:s_offset + nbytes], dtype=dt).reshape(shape).copy()
+            w[name] = torch.from_numpy(arr)
+            s_offset += nbytes
+        elif stream == "p":
+            dt = np.dtype(dtype_str)
+            if len(shape) == 2:
+                arr = np.frombuffer(p_raw[p_offset:p_offset + nbytes], dtype=dt).reshape(shape[1], shape[0]).T.copy()
+            else:
+                arr = np.frombuffer(p_raw[p_offset:p_offset + nbytes], dtype=dt).reshape(shape).copy()
+            w[name] = torch.from_numpy(arr)
+            p_offset += nbytes
+
+    # De-interleave q stream
+    q_buf = io.BytesIO(q_dense.tobytes())
+    for suffix in sorted(type_groups.keys()):
+        group = type_groups[suffix]
+        shapes = set(tuple(s) for _, s in group)
+        if len(shapes) == 1 and len(group[0][1]) == 2:
+            shape = group[0][1]
+            n_rows = shape[1]  # transposed
+            n_cols = shape[0]
+            n_tensors = len(group)
+            total_bytes = n_rows * n_tensors * n_cols
+            interleaved = np.frombuffer(q_buf.read(total_bytes), dtype=np.int8)
+            interleaved = interleaved.reshape(n_rows, n_tensors, n_cols)
+            for i, (name, _) in enumerate(group):
+                arr = interleaved[:, i, :].T.copy()
                 w[name] = torch.from_numpy(arr)
         else:
             for name, shape in group:
