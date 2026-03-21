@@ -128,6 +128,15 @@ Approaches that HURT:
 - **Result**: 2,942,309 bytes (-11.1% vs baseline, -9.5K vs previous best)
 - **Insight**: tok_emb is 98.9% nonzero — sparse encoding wastes mask space on nearly-full bitmask. Compressing it directly with LZMA saves space AND removes large-value outliers from the abs>1 stream (abs>1 dropped from 351K to 19K compressed). Each stream becomes more homogeneous.
 
+### Exp 27 (exploration): Various mask/int8 optimizations — all REVERTED
+- XOR prediction on zero mask: all strides worse (+173K to +212K)
+- BCJ filters on int8: all worse
+- Unified byte-symbol encoding: 193K worse
+- Per-type mask split: 116-1248 bytes worse
+- Bitorder comparison: 52 bytes diff (big endian already optimal)
+- No-transpose sparse: 21K worse (transpose still helps)
+- Golomb/RLE for mask: worse (runs too short, median=1)
+
 ### Value distribution insight (from analysis)
 - 72.5% of int6 values are 0, 12.8% are +1, 12.8% are -1
 - Shannon entropy: 1.235 bits/value
