@@ -406,6 +406,90 @@ def decode_lzma_streams(blob: bytes) -> dict:
 
 
 # ==============================================================================
+# EXPERIMENT: LZMA for ALL streams
+# ==============================================================================
+
+def encode_lzma_all(sota_obj: dict) -> bytes:
+    """LZMA preset-9 for all streams + transpose."""
+    w = sota_obj["w"]
+    m = sota_obj["m"]
+
+    q_parts = []
+    s_parts = []
+    p_parts = []
+    manifest = []
+
+    for name in sorted(w.keys()):
+        t = w[name]
+        arr = t.numpy() if isinstance(t, torch.Tensor) else np.asarray(t)
+        if arr.ndim == 2:
+            arr = arr.T.copy()
+        manifest.append((name, str(arr.dtype), list(t.shape), arr.nbytes))
+
+        if name.endswith(".q"):
+            q_parts.append(arr.tobytes())
+        elif name.endswith(".scale"):
+            s_parts.append(arr.tobytes())
+        else:
+            p_parts.append(arr.tobytes())
+
+    q_blob = lzma.compress(b"".join(q_parts), preset=9) if q_parts else b""
+    s_blob = lzma.compress(b"".join(s_parts), preset=9) if s_parts else b""
+    p_blob = lzma.compress(b"".join(p_parts), preset=9) if p_parts else b""
+    meta_blob = lzma.compress(pickle.dumps({"m": m, "manifest": manifest},
+                                            protocol=pickle.HIGHEST_PROTOCOL), preset=9)
+
+    out = io.BytesIO()
+    out.write(b"A")  # magic for all-LZMA
+    for blob in (q_blob, s_blob, p_blob):
+        out.write(struct.pack("<I", len(blob)))
+        out.write(blob)
+    out.write(meta_blob)
+    return out.getvalue()
+
+
+def decode_lzma_all(blob: bytes) -> dict:
+    """Decode all-LZMA format."""
+    buf = io.BytesIO(blob)
+    assert buf.read(1) == b"A"
+
+    q_len = struct.unpack("<I", buf.read(4))[0]
+    q_raw = lzma.decompress(buf.read(q_len)) if q_len > 0 else b""
+    s_len = struct.unpack("<I", buf.read(4))[0]
+    s_raw = lzma.decompress(buf.read(s_len)) if s_len > 0 else b""
+    p_len = struct.unpack("<I", buf.read(4))[0]
+    p_raw = lzma.decompress(buf.read(p_len)) if p_len > 0 else b""
+    meta_obj = pickle.loads(lzma.decompress(buf.read()))
+
+    m = meta_obj["m"]
+    manifest = meta_obj["manifest"]
+    w = {}
+    offsets = {"q": 0, "s": 0, "p": 0}
+    raw_map = {"q": q_raw, "s": s_raw, "p": p_raw}
+
+    for name, dtype_str, shape, nbytes in manifest:
+        if name.endswith(".q"):
+            stream_key = "q"
+        elif name.endswith(".scale"):
+            stream_key = "s"
+        else:
+            stream_key = "p"
+
+        off = offsets[stream_key]
+        raw_bytes = raw_map[stream_key][off:off + nbytes]
+        offsets[stream_key] = off + nbytes
+
+        dt = np.dtype(dtype_str)
+        if len(shape) == 2:
+            arr = np.frombuffer(raw_bytes, dtype=dt).reshape(shape[1], shape[0]).T.copy()
+        else:
+            arr = np.frombuffer(raw_bytes, dtype=dt).reshape(shape).copy()
+        w[name] = torch.from_numpy(arr)
+
+    return {"w": w, "m": m}
+
+
+# ==============================================================================
 # HELPERS
 # ==============================================================================
 
