@@ -32,16 +32,15 @@ Approaches that HURT:
 - Delta encoding (adjacent values not correlated in weight matrices)
 - Custom binary format (torch.save pickle overhead is negligible after compression)
 
-## Ideas queue
+## Ideas queue (remaining untried or partially explored)
 
-- Split int6 .q and int8 .q into separate sub-streams (different value distributions)
-- Byte shuffling for fp16 scales (split high/low bytes)
-- Per-tensor zstd frames (tailored entropy models)
-- Value zigzag encoding (concentrate values near 0)
-- Interleave tensor bytes differently (e.g., row-interleaved across tensors)
-- Try zstd with different windowLog/chainLog parameters
-- Try combining transpose with nibble-level reorganization
-- XOR with predicted values (e.g., XOR each row with previous row)
+- Custom entropy coder (ANS/Huffman) for the zero mask stream — the biggest component at 1.69MB
+- XOR sign bits with row/column predictions (slight autocorrelation ~51.5% at stride 1)
+- Variable-length coding for abs>1 values (Golomb, Elias gamma)
+- Combine bitmask encoding with position-aware context (LZMA can't exploit 2D structure in flattened data)
+- Try LZMA with custom filter chain (different dict_size per stream)
+- Analyze per-row/per-column sparsity patterns — if some rows are always zero, skip them entirely
+- Investigate if the bitmask has 2D structure exploitable with a 2D-aware transform before packing
 
 ## Experiment log
 
