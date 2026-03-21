@@ -19,4 +19,5 @@ exp16_bshuffle	3257957	17178912	5.27	0.0	reverted	Byte shuffle fp16 scales (8 by
 exp17_zigzag	3264981	17178912	5.26	0.0	reverted	Zigzag encoding for weights
 exp18_typegroup	3250029	17178912	5.29	0.0	kept	Group same tensor types across layers
 exp19_interleave	3248601	17178912	5.29	0.0	kept	Row-interleave same-type tensors
-exp20_sparse	3034601	17178912	5.66	0.0	kept	Sparse bitmask + nonzero values + interleave (current best, -8.3%)
+exp20_sparse	3034601	17178912	5.66	0.0	kept	Sparse bitmask + nonzero values + interleave
+exp21_sign_abs	2977925	17178912	5.77	0.0	kept	Sign+abs split for nonzero values (current best, -10.0%)
