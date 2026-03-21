@@ -205,6 +205,105 @@ def decode_transpose_v1(blob: bytes) -> dict:
 
 
 # ==============================================================================
+# EXPERIMENT: Separate zstd-22 streams per data type
+# Compress int8 weights, fp16 scales, fp32 passthrough, and metadata
+# each independently, then concatenate. Each gets its own entropy model.
+# ==============================================================================
+
+def encode_separate_streams(sota_obj: dict) -> bytes:
+    """Separate compression streams per data type + transpose."""
+    if not HAS_ZSTD:
+        raise ImportError("zstandard not installed")
+
+    w = sota_obj["w"]
+    m = sota_obj["m"]
+    cctx = zstandard.ZstdCompressor(level=22)
+
+    # Collect bytes by type, transposing 2D tensors
+    q_parts = []   # int8 quantized weights
+    s_parts = []   # fp16 scales
+    p_parts = []   # passthrough (mixed types)
+    manifest = []  # (name, dtype_str, shape) for reconstruction
+
+    for name in sorted(w.keys()):
+        t = w[name]
+        arr = t.numpy() if isinstance(t, torch.Tensor) else np.asarray(t)
+        if arr.ndim == 2:
+            arr = arr.T.copy()  # transpose for better compression
+        manifest.append((name, str(arr.dtype), list(t.shape), arr.nbytes))
+
+        if name.endswith(".q"):
+            q_parts.append(arr.tobytes())
+        elif name.endswith(".scale"):
+            s_parts.append(arr.tobytes())
+        else:
+            p_parts.append(arr.tobytes())
+
+    # Compress each stream independently
+    q_blob = cctx.compress(b"".join(q_parts)) if q_parts else b""
+    s_blob = cctx.compress(b"".join(s_parts)) if s_parts else b""
+    p_blob = cctx.compress(b"".join(p_parts)) if p_parts else b""
+    meta_blob = cctx.compress(pickle.dumps({"m": m, "manifest": manifest},
+                                            protocol=pickle.HIGHEST_PROTOCOL))
+
+    # Pack: [4B q_len][q_blob][4B s_len][s_blob][4B p_len][p_blob][meta_blob]
+    out = io.BytesIO()
+    for blob in (q_blob, s_blob, p_blob):
+        out.write(struct.pack("<I", len(blob)))
+        out.write(blob)
+    out.write(meta_blob)
+    return out.getvalue()
+
+
+def decode_separate_streams(blob: bytes) -> dict:
+    """Decode separate-streams format."""
+    if not HAS_ZSTD:
+        raise ImportError("zstandard not installed")
+
+    dctx = zstandard.ZstdDecompressor()
+    buf = io.BytesIO(blob)
+
+    # Read 3 length-prefixed compressed streams
+    streams = []
+    for _ in range(3):
+        slen = struct.unpack("<I", buf.read(4))[0]
+        streams.append(dctx.decompress(buf.read(slen)))
+    q_raw, s_raw, p_raw = streams
+
+    # Remaining bytes = compressed metadata
+    meta_obj = pickle.loads(dctx.decompress(buf.read()))
+    m = meta_obj["m"]
+    manifest = meta_obj["manifest"]
+
+    # Reconstruct tensors
+    w = {}
+    offsets = {"q": 0, "s": 0, "p": 0}
+    raw_map = {"q": q_raw, "s": s_raw, "p": p_raw}
+
+    for name, dtype_str, shape, nbytes in manifest:
+        if name.endswith(".q"):
+            stream_key = "q"
+        elif name.endswith(".scale"):
+            stream_key = "s"
+        else:
+            stream_key = "p"
+
+        off = offsets[stream_key]
+        raw_bytes = raw_map[stream_key][off:off + nbytes]
+        offsets[stream_key] = off + nbytes
+
+        dt = np.dtype(dtype_str)
+        # Data was stored transposed for 2D
+        if len(shape) == 2:
+            arr = np.frombuffer(raw_bytes, dtype=dt).reshape(shape[1], shape[0]).T.copy()
+        else:
+            arr = np.frombuffer(raw_bytes, dtype=dt).reshape(shape).copy()
+        w[name] = torch.from_numpy(arr)
+
+    return {"w": w, "m": m}
+
+
+# ==============================================================================
 # HELPERS
 # ==============================================================================
 

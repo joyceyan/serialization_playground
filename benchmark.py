@@ -21,8 +21,10 @@ import torch
 from serialize import (
     HAS_ZSTD,
     decode_baseline,
+    decode_separate_streams,
     decode_transpose_v1,
     encode_baseline,
+    encode_separate_streams,
     encode_transpose_v1,
     load_and_convert,
     measure_scheme,
@@ -150,6 +152,7 @@ def main() -> None:
     schemes = [
         ("baseline_zstd22", encode_baseline, decode_baseline),
         ("transpose_v1", encode_transpose_v1, decode_transpose_v1),
+        ("sep_streams", encode_separate_streams, decode_separate_streams),
     ]
 
     # Run benchmarks
