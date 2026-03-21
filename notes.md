@@ -107,6 +107,10 @@ Approaches that HURT:
 - **Result**: 3,248,601 bytes (-1.9% vs baseline, -1,428 vs typegroup)
 - **Insight**: Row-level interleaving gives LZMA even more cross-layer correlation. Corresponding rows from different layers' same-type weights are adjacent → more pattern matches.
 
+### Exp 20: Sparse representation (bitmask + nonzero values) — KEPT (current best)
+- **Result**: 3,034,601 bytes (-8.3% vs baseline, -214K vs interleave!)
+- **Insight**: MASSIVE win. 72.5% of values are zero → store a bitmask (zero/nonzero) + only non-zero values. Each component compresses extremely well separately: bitmask is highly regular, non-zero values are 93% +-1. This is the single biggest improvement in the entire experiment log. Encode is also much faster (3.3s vs 12.8s) because LZMA operates on smaller data.
+
 ### Value distribution insight (from analysis)
 - 72.5% of int6 values are 0, 12.8% are +1, 12.8% are -1
 - Shannon entropy: 1.235 bits/value
