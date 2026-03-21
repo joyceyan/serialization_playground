@@ -195,7 +195,7 @@ def encode_experiment(quant_result: dict[str, Tensor], quant_meta: dict[str, obj
         arr = np.frombuffer(raw, dtype=np.uint8)
         high = arr[0::2].tobytes()  # high bytes
         low = arr[1::2].tobytes()   # low bytes
-        streams["fp16"] = comp.compress(high + low)
+        streams["fp16"] = lzma.compress(high + low, preset=9 | lzma.PRESET_EXTREME)
 
     # fp32 stream: byte-shuffle (4 sub-streams)
     fp32_parts = []
@@ -247,7 +247,8 @@ def decode_experiment(blob: bytes) -> tuple[dict[str, Tensor], dict[str, object]
 
     header = pickle.loads(decomp.decompress(read_block()))
     int8_raw = decomp.decompress(read_block()) if header["int8_keys"] else b""
-    fp16_raw_shuffled = decomp.decompress(read_block()) if header["fp16_keys"] else b""
+    fp16_block = read_block()
+    fp16_raw_shuffled = lzma.decompress(fp16_block) if header["fp16_keys"] else b""
     fp32_raw_shuffled = decomp.decompress(read_block()) if header["fp32_keys"] else b""
 
     # Unshuffle fp16: high bytes then low bytes → interleave
