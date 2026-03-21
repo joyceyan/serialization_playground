@@ -910,11 +910,16 @@ def encode_lzma_sparse(sota_obj: dict) -> bytes:
     abs_not_one_mask = np.packbits(not_one.astype(np.uint8))
     abs_gt1_vals = absvals[not_one]
 
+    # Use LZMA RAW format to avoid XZ container overhead (~60 bytes/stream saved)
+    lzma_filters = [{"id": lzma.FILTER_LZMA2, "preset": preset}]
+    def _lzma_raw(data: bytes) -> bytes:
+        return lzma.compress(data, format=lzma.FORMAT_RAW, filters=lzma_filters)
+
     # Compress streams (combine mask + abs_mask for better compression)
     combined_masks = bitmask.tobytes() + abs_not_one_mask.tobytes()
-    masks_blob = lzma.compress(combined_masks, preset=preset)
-    signs_blob = lzma.compress(signs.tobytes(), preset=preset)
-    abs_vals_blob = lzma.compress(abs_gt1_vals.tobytes(), preset=preset)
+    masks_blob = _lzma_raw(combined_masks)
+    signs_blob = _lzma_raw(signs.tobytes())
+    abs_vals_blob = _lzma_raw(abs_gt1_vals.tobytes())
     # Combine int8 + scales + byte-shuffled passthrough into one stream
     p_raw = b"".join(p_parts)
     if p_raw:
@@ -923,8 +928,8 @@ def encode_lzma_sparse(sota_obj: dict) -> bytes:
     else:
         p_shuffled = b""
     misc_raw = b"".join(int8_parts) + b"".join(s_parts) + p_shuffled
-    misc_blob = lzma.compress(misc_raw, preset=preset) if misc_raw else b""
-    meta_blob = lzma.compress(pickle.dumps({
+    misc_blob = _lzma_raw(misc_raw) if misc_raw else b""
+    meta_blob = _lzma_raw(pickle.dumps({
         "m": m, "manifest": manifest,
         "type_groups": {k: [(n, list(a.shape)) for n, a in v]
                        for k, v in type_groups.items()},
@@ -932,7 +937,7 @@ def encode_lzma_sparse(sota_obj: dict) -> bytes:
         "q8_len": sum(len(p) for p in int8_parts),
         "s_len": sum(len(p) for p in s_parts),
         "p_len": len(p_shuffled),
-    }, protocol=pickle.HIGHEST_PROTOCOL), preset=preset)
+    }, protocol=pickle.HIGHEST_PROTOCOL))
 
     # Pack: magic + [masks][signs][abs_vals][misc][meta]
     out = io.BytesIO()
@@ -949,13 +954,18 @@ def decode_lzma_sparse(blob: bytes) -> dict:
     buf = io.BytesIO(blob)
     assert buf.read(1) == b"S"
 
+    # LZMA RAW decompression
+    lzma_filters = [{"id": lzma.FILTER_LZMA2}]
+    def _lzma_raw_dec(data: bytes) -> bytes:
+        return lzma.decompress(data, format=lzma.FORMAT_RAW, filters=lzma_filters)
+
     # Read compressed streams
     blobs = []
     for _ in range(4):
         slen = struct.unpack("<I", buf.read(4))[0]
-        blobs.append(lzma.decompress(buf.read(slen)) if slen > 0 else b"")
+        blobs.append(_lzma_raw_dec(buf.read(slen)) if slen > 0 else b"")
     combined_masks_raw, signs_raw, abs_vals_raw, misc_raw = blobs
-    meta_obj = pickle.loads(lzma.decompress(buf.read()))
+    meta_obj = pickle.loads(_lzma_raw_dec(buf.read()))
 
     m_meta = meta_obj["m"]
     manifest = meta_obj["manifest"]
