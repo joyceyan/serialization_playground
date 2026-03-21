@@ -111,9 +111,13 @@ Approaches that HURT:
 - **Result**: 3,034,601 bytes (-8.3% vs baseline, -214K vs interleave!)
 - **Insight**: MASSIVE win. 72.5% of values are zero → store a bitmask (zero/nonzero) + only non-zero values. Each component compresses extremely well separately: bitmask is highly regular, non-zero values are 93% +-1. This is the single biggest improvement in the entire experiment log. Encode is also much faster (3.3s vs 12.8s) because LZMA operates on smaller data.
 
-### Exp 21: Sign+abs split for non-zero values — KEPT (current best)
+### Exp 21: Sign+abs split for non-zero values — KEPT (superseded by exp 22)
 - **Result**: 2,977,925 bytes (-10.0% vs baseline, -56.7K vs plain sparse!)
 - **Insight**: Splitting non-zero values into packed sign bits + absolute values compresses much better. Signs are ~50/50 → pack and compress efficiently. Absolute values are 93% = 1 → extremely compressible as a separate stream.
+
+### Exp 22: Decompose abs into abs==1 mask + abs>1 values — KEPT (current best)
+- **Result**: 2,957,897 bytes (-10.7% vs baseline, -20K vs sign+abs)
+- **Insight**: 83.5% of non-zero abs values are exactly 1. Storing a bitmask for "is it 1?" and only the remaining values (16.5% of non-zero) saves 20KB. Total: 5 compressed streams for weights (zero-mask, signs, abs==1-mask, abs>1-values) + scales + passthrough + meta = 8 streams.
 
 ### Value distribution insight (from analysis)
 - 72.5% of int6 values are 0, 12.8% are +1, 12.8% are -1
