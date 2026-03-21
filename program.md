@@ -80,4 +80,4 @@ LOOP FOREVER:
 
 - Any custom format needs a corresponding decoder. Keep decoders simple and fast.
 - Decompression speed is secondary to compressed size, but should remain reasonable (under a few seconds).
-- Test artifacts are at `/Users/jyan/src/parameter-golf-fork/logs/*.int8.ptz`, loaded via `serialize.load_and_convert()`.
+- Test artifact: `final_model.pt` in this repo, loaded via `serialize.load_and_quantize()`.
