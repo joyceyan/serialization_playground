@@ -57,3 +57,9 @@ Phase 1 optimized against an MLX smoke-test artifact with 72.5% zero values and 
 **Hypothesis**: Transposing makes column values (same output neuron) adjacent, improving compressibility. Was -0.7% in Phase 1.
 **Result**: 15,500,303 bytes (-12,728, -0.08%). Small win.
 **Insight**: Only 0.08% vs 0.7% in Phase 1. The dense H100 weights have less column correlation than the MLX artifact. Still a free win with no downside. Need bigger ideas.
+
+### Exp 3: Separate dtype streams + transpose + custom binary format — KEPT
+
+**Hypothesis**: Grouping all int8 data together (removing pickle interleaving) gives zstd a contiguous block of similar data to compress. Combined with transpose and no pickle overhead.
+**Result**: 15,350,003 bytes (-163,028, -1.05%). Significant win!
+**Insight**: Stripping pickle overhead and grouping by dtype is the real win here, not just transpose. The int8 stream is 25.9MB of int6-range values — compressing it as one contiguous block lets zstd find much longer matches. Encode is actually faster too (15.9s vs 17.1s) since we avoid pickle serialization overhead.

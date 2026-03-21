@@ -189,6 +189,7 @@ def encode_experiment(quant_result: dict[str, Tensor], quant_meta: dict[str, obj
         "fp16_keys": fp16_keys,
         "fp32_keys": fp32_keys,
         "shapes": {k: list(quant_result[k].shape) for k in _sorted_keys(quant_result)},
+        "transposed": {k for k in _sorted_keys(quant_result) if quant_result[k].ndim == 2},
         "meta": quant_meta,
     })
     header_c = comp.compress(header)
@@ -226,6 +227,7 @@ def decode_experiment(blob: bytes) -> tuple[dict[str, Tensor], dict[str, object]
                  "fp32": (torch.float32, fp32_raw, np.float32)}
 
     w = {}
+    transposed = header.get("transposed", set())
     offsets = {"int8": 0, "fp16": 0, "fp32": 0}
     for label, keys in [("int8", header["int8_keys"]), ("fp16", header["fp16_keys"]), ("fp32", header["fp32_keys"])]:
         dt, raw, npdt = dtype_map[label]
@@ -237,9 +239,11 @@ def decode_experiment(blob: bytes) -> tuple[dict[str, Tensor], dict[str, object]
             nbytes = numel * np.dtype(npdt).itemsize
             arr = np.frombuffer(raw, dtype=npdt, count=numel, offset=offsets[label])
             offsets[label] += nbytes
-            t = torch.from_numpy(arr.copy()).reshape(shape)
-            if t.ndim == 2:
-                t = t.t().contiguous()
+            # Data was stored transposed, so reshape to transposed shape first
+            if k in transposed:
+                t = torch.from_numpy(arr.copy()).reshape(shape[1], shape[0]).t().contiguous()
+            else:
+                t = torch.from_numpy(arr.copy()).reshape(shape)
             w[k] = t
     return w, header["meta"]
 
