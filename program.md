@@ -2,7 +2,7 @@
 
 ## Goal
 
-Beat the baseline serialization (`torch.save` + `zstd-22`) by producing a smaller compressed artifact while preserving dequantization accuracy. Every byte saved means more room for model parameters in the competition.
+Beat the baseline serialization (`torch.save` + `zstd-22`) by producing a smaller compressed artifact while preserving dequantization accuracy.
 
 ## Context
 
@@ -29,19 +29,10 @@ From analysis of a real artifact:
 
 Most block weights have actual ranges of [-28, 28] or smaller — well within int6 [-32, 31]. Only `tok_emb.weight` uses the full int8 range [-114, 122]. This means most weights waste 2+ bits per value in int8 containers.
 
-### H100 SOTA structure (11L, 512dim, MLP3x)
-
-The actual competition artifacts are larger:
-- ~26.8M parameters
-- Mixed int6 (attn+MLP) + int8 (embedding) quantization
-- zstd-22 compression
-- Artifacts ~15.5-15.9MB (tight against 16MB limit)
-
 ## Test artifacts
 
 Use real artifacts from the parameter-golf-fork repo:
-- **MLX artifacts**: `/Users/jyan/src/parameter-golf-fork/logs/*.int8.ptz` (pickle + zlib format)
-- **H100 artifacts**: Would use torch.save + zstd format (not available locally, but we can simulate)
+- **MLX artifacts**: `/Users/jyan/src/parameter-golf-fork/logs/*.int8.ptz` (pickle + zlib format, converted to SOTA format via `load_and_convert`)
 
 ## Experiment methodology
 
@@ -91,6 +82,6 @@ For every serialization scheme, report:
 
 ## Important notes
 
-- The H100 pipeline uses `torch.save` not `pickle.dumps`. Both use pickle under the hood, but torch.save adds its own header. For local experiments, work with the MLX pickle format since we have real artifacts. The techniques (bit packing, compression, format) transfer directly.
-- The eval harness must be able to decompress and dequantize the artifact. Any custom format needs a decoder that fits in the code budget (~50-60KB of Python).
-- Decompression + dequantization speed matters (10-min eval budget), but is secondary to size.
+- The baseline uses `torch.save` + `zstd-22`. Our schemes must produce smaller output.
+- Any custom format needs a corresponding decoder. Keep decoders simple and fast.
+- Decompression speed is secondary to compressed size, but should remain reasonable (under a few seconds).
