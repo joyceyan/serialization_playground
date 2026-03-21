@@ -126,8 +126,18 @@ Phase 1 optimized against an MLX smoke-test artifact with 72.5% zero values and 
 2. Fundamentally different data representation (bit-packing, prediction + residual)
 3. Per-tensor custom encoding (avoid the one-size-fits-all approach)
 
-**Next ideas**:
-- Try per-tensor compression: compress each tensor individually with zstd-22 using a trained dict
-- Try bit-plane decomposition: extract bit 0, bit 1, ..., bit 5 separately
-- Try Burrows-Wheeler Transform (BWT) pre-filter before zstd
-- Try zstd with different search_log/hash_log for potentially more matches
+### Exp 13: zstd custom params (higher search_log) — REVERTED
+**Result**: -1 byte. Not meaningful.
+
+### Exp 13b: Nibble-split int8 stream — REVERTED
+**Result**: 17,443,868 bytes (+12.4% worse). Catastrophic. Packing nibbles destroys positional correlations.
+**Insight**: Any scheme that reorders bytes at sub-byte level destroys the LZ77 match patterns that zstd exploits. This definitively rules out bit-plane decomposition and nibble splitting.
+
+**Strategy pivot**: We're at 15,334,299 (-1.15%) and running out of incremental ideas for the int8 stream. Need to think about this differently:
+
+**Next ideas (more radical)**:
+- Try compressing the whole combined blob (header + all streams) as a single zstd frame instead of per-stream
+- Try a fundamentally different layout: interleave scale bytes with their weight bytes
+- Try zstd dictionary trained on the data itself (dict stored in header)
+- Use Brotli instead of zstd (pip install brotli) — different algorithm entirely
+- Accept we're near optimal and try to eke out bytes elsewhere
