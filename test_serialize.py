@@ -17,9 +17,11 @@ import torch
 from serialize import (
     HAS_ZSTD,
     decode_baseline,
+    decode_lzma_streams,
     decode_separate_streams,
     decode_transpose_v1,
     encode_baseline,
+    encode_lzma_streams,
     encode_separate_streams,
     encode_transpose_v1,
     load_and_convert,
@@ -113,6 +115,7 @@ def test_synthetic() -> None:
         roundtrip_check("baseline (synthetic)", encode_baseline, decode_baseline, sota_obj)
         roundtrip_check("transpose_v1 (synthetic)", encode_transpose_v1, decode_transpose_v1, sota_obj)
         roundtrip_check("sep_streams (synthetic)", encode_separate_streams, decode_separate_streams, sota_obj)
+        roundtrip_check("lzma_streams (synthetic)", encode_lzma_streams, decode_lzma_streams, sota_obj)
     else:
         print("  SKIP: zstandard not installed")
 
@@ -168,6 +171,7 @@ def test_real_roundtrip() -> None:
     roundtrip_check("baseline (real)", encode_baseline, decode_baseline, sota_obj)
     roundtrip_check("transpose_v1 (real)", encode_transpose_v1, decode_transpose_v1, sota_obj)
     roundtrip_check("sep_streams (real)", encode_separate_streams, decode_separate_streams, sota_obj)
+    roundtrip_check("lzma_streams (real)", encode_lzma_streams, decode_lzma_streams, sota_obj)
 
 
 def main() -> None:

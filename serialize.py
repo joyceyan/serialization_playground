@@ -16,6 +16,7 @@ The sota_obj format (what gets serialized) has keys:
 from __future__ import annotations
 
 import io
+import lzma
 import pickle
 import struct
 import time
@@ -294,6 +295,111 @@ def decode_separate_streams(blob: bytes) -> dict:
 
         dt = np.dtype(dtype_str)
         # Data was stored transposed for 2D
+        if len(shape) == 2:
+            arr = np.frombuffer(raw_bytes, dtype=dt).reshape(shape[1], shape[0]).T.copy()
+        else:
+            arr = np.frombuffer(raw_bytes, dtype=dt).reshape(shape).copy()
+        w[name] = torch.from_numpy(arr)
+
+    return {"w": w, "m": m}
+
+
+# ==============================================================================
+# EXPERIMENT: LZMA for weight stream, zstd for rest
+# LZMA (LZMA2) may achieve better ratio than zstd for weight data.
+# ==============================================================================
+
+def encode_lzma_streams(sota_obj: dict) -> bytes:
+    """LZMA for weight stream, zstd-22 for scales/passthrough."""
+    if not HAS_ZSTD:
+        raise ImportError("zstandard not installed")
+
+    w = sota_obj["w"]
+    m = sota_obj["m"]
+    cctx = zstandard.ZstdCompressor(level=22)
+
+    q_parts = []
+    s_parts = []
+    p_parts = []
+    manifest = []
+
+    for name in sorted(w.keys()):
+        t = w[name]
+        arr = t.numpy() if isinstance(t, torch.Tensor) else np.asarray(t)
+        if arr.ndim == 2:
+            arr = arr.T.copy()
+        manifest.append((name, str(arr.dtype), list(t.shape), arr.nbytes))
+
+        if name.endswith(".q"):
+            q_parts.append(arr.tobytes())
+        elif name.endswith(".scale"):
+            s_parts.append(arr.tobytes())
+        else:
+            p_parts.append(arr.tobytes())
+
+    # LZMA for weight stream (best ratio), zstd for small streams
+    q_blob = lzma.compress(b"".join(q_parts),
+                           format=lzma.FORMAT_RAW,
+                           filters=[{"id": lzma.FILTER_LZMA2, "preset": 9}])
+    s_blob = cctx.compress(b"".join(s_parts)) if s_parts else b""
+    p_blob = cctx.compress(b"".join(p_parts)) if p_parts else b""
+    meta_blob = cctx.compress(pickle.dumps({"m": m, "manifest": manifest},
+                                            protocol=pickle.HIGHEST_PROTOCOL))
+
+    # Mark format with magic byte 'L' for LZMA
+    out = io.BytesIO()
+    out.write(b"L")
+    for blob in (q_blob, s_blob, p_blob):
+        out.write(struct.pack("<I", len(blob)))
+        out.write(blob)
+    out.write(meta_blob)
+    return out.getvalue()
+
+
+def decode_lzma_streams(blob: bytes) -> dict:
+    """Decode LZMA-streams format."""
+    if not HAS_ZSTD:
+        raise ImportError("zstandard not installed")
+
+    dctx = zstandard.ZstdDecompressor()
+    buf = io.BytesIO(blob)
+
+    magic = buf.read(1)
+    assert magic == b"L"
+
+    # Weight stream: LZMA
+    q_len = struct.unpack("<I", buf.read(4))[0]
+    q_raw = lzma.decompress(buf.read(q_len),
+                            format=lzma.FORMAT_RAW,
+                            filters=[{"id": lzma.FILTER_LZMA2}])
+
+    # Scale and passthrough: zstd
+    s_len = struct.unpack("<I", buf.read(4))[0]
+    s_raw = dctx.decompress(buf.read(s_len)) if s_len > 0 else b""
+    p_len = struct.unpack("<I", buf.read(4))[0]
+    p_raw = dctx.decompress(buf.read(p_len)) if p_len > 0 else b""
+    meta_obj = pickle.loads(dctx.decompress(buf.read()))
+
+    m = meta_obj["m"]
+    manifest = meta_obj["manifest"]
+
+    w = {}
+    offsets = {"q": 0, "s": 0, "p": 0}
+    raw_map = {"q": q_raw, "s": s_raw, "p": p_raw}
+
+    for name, dtype_str, shape, nbytes in manifest:
+        if name.endswith(".q"):
+            stream_key = "q"
+        elif name.endswith(".scale"):
+            stream_key = "s"
+        else:
+            stream_key = "p"
+
+        off = offsets[stream_key]
+        raw_bytes = raw_map[stream_key][off:off + nbytes]
+        offsets[stream_key] = off + nbytes
+
+        dt = np.dtype(dtype_str)
         if len(shape) == 2:
             arr = np.frombuffer(raw_bytes, dtype=dt).reshape(shape[1], shape[0]).T.copy()
         else:
