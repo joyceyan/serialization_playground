@@ -1,16 +1,15 @@
 #!/usr/bin/env python3
 """
-Benchmark all serialization schemes against real artifacts in SOTA format.
+Benchmark serialization schemes against a real H100 model artifact.
 
 Usage:
-    source /Users/jyan/src/parameter-golf-fork/.venv/bin/activate
-    python benchmark.py [--artifact PATH] [--summary]
+    cd /Users/jyan/src/serialization_playground
+    python benchmark.py [--model PATH]
 """
 
 from __future__ import annotations
 
 import argparse
-import glob
 import math
 import os
 import sys
@@ -21,36 +20,66 @@ import torch
 from serialize import (
     HAS_ZSTD,
     decode_baseline,
-    decode_lzma_all,
-    decode_lzma_extreme,
-    decode_lzma_interleave,
-    decode_lzma_sparse,
-    decode_lzma_streams,
-    decode_lzma_typegroup,
-    decode_separate_streams,
-    decode_transpose_v1,
     encode_baseline,
-    encode_lzma_all,
-    encode_lzma_extreme,
-    encode_lzma_interleave,
-    encode_lzma_sparse,
-    encode_lzma_streams,
-    encode_lzma_typegroup,
-    encode_separate_streams,
-    encode_transpose_v1,
-    load_and_convert,
+    load_and_quantize,
     measure_scheme,
 )
 
-ARTIFACT_DIR = "/Users/jyan/src/parameter-golf-fork/logs"
-DEFAULT_ARTIFACT = os.path.join(
-    ARTIFACT_DIR,
-    "f3ffa88d-62a7-4575-8c89-0ef6a07eb11a_mlx_model.int8.ptz",
-)
+DEFAULT_MODEL = "/Users/jyan/src/serialization_playground/final_model.pt"
+
+
+def artifact_summary(quant_result: dict, quant_meta: dict) -> None:
+    """Print a summary of the quantized artifact."""
+    total_int6 = 0
+    total_int8 = 0
+    total_scale = 0
+    total_pass = 0
+    n_int6 = 0
+    n_int8 = 0
+
+    for name, info in quant_meta.items():
+        if isinstance(info, dict) and info.get("type") == "int6":
+            t = quant_result[name + ".q"]
+            total_int6 += t.nelement() * t.element_size()
+            total_scale += quant_result[name + ".scale"].nelement() * quant_result[name + ".scale"].element_size()
+            n_int6 += 1
+        elif isinstance(info, dict) and info.get("type") == "int8":
+            t = quant_result[name + ".q"]
+            total_int8 += t.nelement() * t.element_size()
+            total_scale += quant_result[name + ".scale"].nelement() * quant_result[name + ".scale"].element_size()
+            n_int8 += 1
+        elif info in ("passthrough", "passthrough_ctrl"):
+            t = quant_result[name]
+            total_pass += t.nelement() * t.element_size()
+
+    total = total_int6 + total_int8 + total_scale + total_pass
+    print(f"Quantized: {n_int6} int6 tensors ({total_int6:,}b), "
+          f"{n_int8} int8 tensors ({total_int8:,}b), "
+          f"scales {total_scale:,}b, passthrough {total_pass:,}b")
+    print(f"Total raw bytes: {total:,}")
+
+    # Value ranges
+    print("\nInt6 tensor ranges:")
+    for name, info in sorted(quant_meta.items()):
+        if isinstance(info, dict) and info.get("type") == "int6":
+            t = quant_result[name + ".q"]
+            lo, hi = int(t.min()), int(t.max())
+            n_zero = int((t == 0).sum())
+            pct_zero = 100.0 * n_zero / t.nelement()
+            print(f"  {name}: [{lo}, {hi}] {pct_zero:.1f}% zeros")
+
+    print("\nInt8 tensor ranges:")
+    for name, info in sorted(quant_meta.items()):
+        if isinstance(info, dict) and info.get("type") == "int8":
+            t = quant_result[name + ".q"]
+            lo, hi = int(t.min()), int(t.max())
+            n_zero = int((t == 0).sum())
+            pct_zero = 100.0 * n_zero / t.nelement()
+            print(f"  {name}: [{lo}, {hi}] {pct_zero:.1f}% zeros")
+    print()
 
 
 def print_table(results: list[dict]) -> None:
-    """Print results as a formatted table."""
     headers = ["scheme", "compressed", "savings", "max_err", "encode_ms", "decode_ms"]
     baseline_size = results[0]["compressed_bytes"] if results else 1
 
@@ -69,116 +98,45 @@ def print_table(results: list[dict]) -> None:
 
     widths = [max(len(h), max((len(row[i]) for row in rows), default=0)) for i, h in enumerate(headers)]
     fmt = "  ".join(f"{{:<{w}}}" for w in widths)
-
     print(fmt.format(*headers))
     print(fmt.format(*["-" * w for w in widths]))
     for row in rows:
         print(fmt.format(*row))
 
 
-def artifact_summary(sota_obj: dict) -> None:
-    """Print a summary of the SOTA-format artifact structure."""
-    w = sota_obj.get("w", {})
-    m = sota_obj.get("m", {})
-
-    total_int6_q = 0
-    total_int8_q = 0
-    total_scale = 0
-    total_pass = 0
-    n_int6 = 0
-    n_int8 = 0
-
-    def _nbytes(t):
-        if isinstance(t, torch.Tensor):
-            return t.nelement() * t.element_size()
-        return np.asarray(t).nbytes
-
-    for name, info in m.items():
-        if isinstance(info, dict) and info.get("type") == "int6":
-            total_int6_q += _nbytes(w[name + ".q"])
-            total_scale += _nbytes(w[name + ".scale"])
-            n_int6 += 1
-        elif isinstance(info, dict) and info.get("type") == "int8":
-            total_int8_q += _nbytes(w[name + ".q"])
-            total_scale += _nbytes(w[name + ".scale"])
-            n_int8 += 1
-        elif info in ("passthrough", "passthrough_ctrl"):
-            total_pass += _nbytes(w[name])
-
-    total = total_int6_q + total_int8_q + total_scale + total_pass
-    print(f"SOTA format: {n_int6} int6 tensors ({total_int6_q:,}b), "
-          f"{n_int8} int8 tensors ({total_int8_q:,}b), "
-          f"scales {total_scale:,}b, passthrough {total_pass:,}b")
-    print(f"Total raw bytes: {total:,}")
-
-    # Value ranges for quantized tensors
-    print("\nInt6 tensor ranges:")
-    for name, info in sorted(m.items()):
-        if isinstance(info, dict) and info.get("type") == "int6":
-            t = w[name + ".q"]
-            lo, hi = int(t.min()), int(t.max())
-            span = hi - lo + 1
-            bits = math.ceil(math.log2(max(span, 1)))
-            print(f"  {name}: [{lo}, {hi}] span={span} bits={bits}")
-
-    print("\nInt8 tensor ranges:")
-    for name, info in sorted(m.items()):
-        if isinstance(info, dict) and info.get("type") == "int8":
-            t = w[name + ".q"]
-            lo, hi = int(t.min()), int(t.max())
-            span = hi - lo + 1
-            bits = math.ceil(math.log2(max(span, 1)))
-            print(f"  {name}: [{lo}, {hi}] span={span} bits={bits}")
-    print()
-
-
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Benchmark serialization schemes (SOTA format)")
-    parser.add_argument("--artifact", default=DEFAULT_ARTIFACT, help="Path to MLX .int8.ptz artifact")
-    parser.add_argument("--summary", action="store_true", help="Print artifact summary only")
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--model", default=DEFAULT_MODEL, help="Path to final_model.pt")
+    parser.add_argument("--summary", action="store_true", help="Print summary only")
     args = parser.parse_args()
 
-    if not os.path.exists(args.artifact):
-        artifacts = sorted(glob.glob(os.path.join(ARTIFACT_DIR, "*.int8.ptz")))
-        if artifacts:
-            args.artifact = artifacts[-1]
-            print(f"Using: {args.artifact}")
-        else:
-            print("No artifacts found. Run a smoke test first.")
-            sys.exit(1)
-
-    print(f"Loading & converting: {os.path.basename(args.artifact)}")
-    sota_obj = load_and_convert(args.artifact)
-
-    if args.summary:
-        artifact_summary(sota_obj)
-        return
-
-    artifact_summary(sota_obj)
-
-    if not HAS_ZSTD:
-        print("ERROR: zstandard not installed. Install with: pip install zstandard")
+    if not os.path.exists(args.model):
+        print(f"Model not found: {args.model}")
+        print("Pull final_model.pt from your RunPod pod first.")
         sys.exit(1)
 
-    # Register all schemes to benchmark
+    print(f"Loading & quantizing: {os.path.basename(args.model)}")
+    quant_result, quant_meta = load_and_quantize(args.model)
+
+    if args.summary:
+        artifact_summary(quant_result, quant_meta)
+        return
+
+    artifact_summary(quant_result, quant_meta)
+
+    if not HAS_ZSTD:
+        print("ERROR: zstandard not installed")
+        sys.exit(1)
+
     schemes = [
         ("baseline_zstd22", encode_baseline, decode_baseline),
-        ("transpose_v1", encode_transpose_v1, decode_transpose_v1),
-        ("sep_streams", encode_separate_streams, decode_separate_streams),
-        ("lzma_streams", encode_lzma_streams, decode_lzma_streams),
-        ("lzma_all", encode_lzma_all, decode_lzma_all),
-        ("lzma_extreme", encode_lzma_extreme, decode_lzma_extreme),
-        ("lzma_typegroup", encode_lzma_typegroup, decode_lzma_typegroup),
-        ("lzma_interleave", encode_lzma_interleave, decode_lzma_interleave),
-        ("lzma_sparse", encode_lzma_sparse, decode_lzma_sparse),
     ]
 
-    # Run benchmarks
     print("Running benchmarks (3 trials each)...\n")
     results = []
     for name, enc, dec in schemes:
         print(f"  {name}...", end=" ", flush=True)
-        r = measure_scheme(name, enc, dec, sota_obj)
+        r = measure_scheme(name, enc, dec, quant_result, quant_meta)
         print(f"{r['compressed_bytes']:,} bytes")
         results.append(r)
 
