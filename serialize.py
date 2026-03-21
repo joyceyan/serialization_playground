@@ -910,10 +910,10 @@ def encode_lzma_sparse(sota_obj: dict) -> bytes:
     abs_not_one_mask = np.packbits(not_one.astype(np.uint8))
     abs_gt1_vals = absvals[not_one]
 
-    # Compress streams
-    mask_blob = lzma.compress(bitmask.tobytes(), preset=preset)
+    # Compress streams (combine mask + abs_mask for better compression)
+    combined_masks = bitmask.tobytes() + abs_not_one_mask.tobytes()
+    masks_blob = lzma.compress(combined_masks, preset=preset)
     signs_blob = lzma.compress(signs.tobytes(), preset=preset)
-    abs_mask_blob = lzma.compress(abs_not_one_mask.tobytes(), preset=preset)
     abs_vals_blob = lzma.compress(abs_gt1_vals.tobytes(), preset=preset)
     q8_blob = lzma.compress(b"".join(int8_parts), preset=preset) if int8_parts else b""
     s_blob = lzma.compress(b"".join(s_parts), preset=preset) if s_parts else b""
@@ -932,10 +932,10 @@ def encode_lzma_sparse(sota_obj: dict) -> bytes:
         "q6_total": len(q_arr),
     }, protocol=pickle.HIGHEST_PROTOCOL), preset=preset)
 
-    # Pack: magic + [mask][signs][abs_mask][abs_vals][q8][s][p][meta]
+    # Pack: magic + [masks][signs][abs_vals][q8][s][p][meta]
     out = io.BytesIO()
     out.write(b"S")  # magic for sparse
-    for blob in (mask_blob, signs_blob, abs_mask_blob, abs_vals_blob, q8_blob, s_blob, p_blob):
+    for blob in (masks_blob, signs_blob, abs_vals_blob, q8_blob, s_blob, p_blob):
         out.write(struct.pack("<I", len(blob)))
         out.write(blob)
     out.write(meta_blob)
@@ -949,10 +949,10 @@ def decode_lzma_sparse(blob: bytes) -> dict:
 
     # Read compressed streams
     blobs = []
-    for _ in range(7):
+    for _ in range(6):
         slen = struct.unpack("<I", buf.read(4))[0]
         blobs.append(lzma.decompress(buf.read(slen)) if slen > 0 else b"")
-    mask_raw, signs_raw, abs_mask_raw, abs_vals_raw, q8_raw, s_raw, p_shuffled = blobs
+    combined_masks_raw, signs_raw, abs_vals_raw, q8_raw, s_raw, p_shuffled = blobs
     # Un-shuffle fp32 passthrough
     if p_shuffled:
         p_arr = np.frombuffer(p_shuffled, dtype=np.uint8)
@@ -969,6 +969,11 @@ def decode_lzma_sparse(blob: bytes) -> dict:
     manifest = meta_obj["manifest"]
     type_groups = meta_obj["type_groups"]
     q6_total = meta_obj["q6_total"]
+
+    # Split combined masks back into zero_mask and abs_mask
+    mask_packed_len = (q6_total + 7) // 8
+    mask_raw = combined_masks_raw[:mask_packed_len]
+    abs_mask_raw = combined_masks_raw[mask_packed_len:]
 
     # Reconstruct dense int6 weight array from sparse sign+abs decomposition
     bitmask = np.unpackbits(np.frombuffer(mask_raw, dtype=np.uint8))[:q6_total]
@@ -1043,6 +1048,128 @@ def decode_lzma_sparse(blob: bytes) -> dict:
                 w[name] = torch.from_numpy(arr)
 
     return {"w": w, "m": m_meta}
+
+
+# ==============================================================================
+# Arithmetic coder for binary data with known probability
+# ==============================================================================
+
+def _arith_encode_binary(bits: np.ndarray, p_one: float) -> bytes:
+    """Simple arithmetic coder for binary data with fixed probability of 1.
+    Uses 32-bit precision with renormalization."""
+    FULL = 1 << 32
+    HALF = 1 << 31
+    QUARTER = 1 << 30
+
+    low = 0
+    high = FULL - 1
+    pending = 0
+    output = bytearray()
+
+    def emit_bit(b):
+        nonlocal pending
+        if b:
+            output.append(1)
+        else:
+            output.append(0)
+        while pending > 0:
+            output.append(0 if b else 1)
+            pending -= 1
+
+    p0 = int((1.0 - p_one) * FULL)  # probability of 0 scaled to FULL
+
+    for bit in bits:
+        rng = high - low + 1
+        if bit == 0:
+            high = low + (rng * p0 >> 32) - 1
+        else:
+            low = low + (rng * p0 >> 32)
+
+        while True:
+            if high < HALF:
+                emit_bit(0)
+            elif low >= HALF:
+                emit_bit(1)
+                low -= HALF
+                high -= HALF
+            elif low >= QUARTER and high < 3 * QUARTER:
+                pending += 1
+                low -= QUARTER
+                high -= QUARTER
+            else:
+                break
+            low <<= 1
+            high = (high << 1) | 1
+
+    # Flush
+    pending += 1
+    if low < QUARTER:
+        emit_bit(0)
+    else:
+        emit_bit(1)
+
+    # Pack bits into bytes
+    result = np.packbits(np.array(output, dtype=np.uint8))
+    return result.tobytes()
+
+
+def _arith_decode_binary(data: bytes, n_bits: int, p_one: float) -> np.ndarray:
+    """Decode arithmetic coded binary data."""
+    FULL = 1 << 32
+    HALF = 1 << 31
+    QUARTER = 1 << 30
+
+    bits_in = np.unpackbits(np.frombuffer(data, dtype=np.uint8))
+    bit_pos = 0
+
+    def read_bit():
+        nonlocal bit_pos
+        if bit_pos < len(bits_in):
+            b = bits_in[bit_pos]
+            bit_pos += 1
+            return int(b)
+        return 0
+
+    # Initialize value
+    value = 0
+    for _ in range(32):
+        value = (value << 1) | read_bit()
+
+    low = 0
+    high = FULL - 1
+    p0 = int((1.0 - p_one) * FULL)
+
+    output = np.empty(n_bits, dtype=np.uint8)
+
+    for i in range(n_bits):
+        rng = high - low + 1
+        threshold = low + (rng * p0 >> 32) - 1
+
+        if value <= threshold:
+            output[i] = 0
+            high = threshold
+        else:
+            output[i] = 1
+            low = threshold + 1
+
+        while True:
+            if high < HALF:
+                pass
+            elif low >= HALF:
+                value -= HALF
+                low -= HALF
+                high -= HALF
+            elif low >= QUARTER and high < 3 * QUARTER:
+                value -= QUARTER
+                low -= QUARTER
+                high -= QUARTER
+            else:
+                break
+            low <<= 1
+            high = (high << 1) | 1
+            value = (value << 1) | read_bit()
+
+    return output
 
 
 # ==============================================================================
