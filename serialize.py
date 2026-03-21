@@ -915,27 +915,29 @@ def encode_lzma_sparse(sota_obj: dict) -> bytes:
     masks_blob = lzma.compress(combined_masks, preset=preset)
     signs_blob = lzma.compress(signs.tobytes(), preset=preset)
     abs_vals_blob = lzma.compress(abs_gt1_vals.tobytes(), preset=preset)
-    q8_blob = lzma.compress(b"".join(int8_parts), preset=preset) if int8_parts else b""
-    s_blob = lzma.compress(b"".join(s_parts), preset=preset) if s_parts else b""
-    # Byte-shuffle fp32 passthrough for better compression
+    # Combine int8 + scales + byte-shuffled passthrough into one stream
     p_raw = b"".join(p_parts)
     if p_raw:
         p_arr = np.frombuffer(p_raw, dtype=np.uint8)
         p_shuffled = b"".join(p_arr[i::4].tobytes() for i in range(4))
-        p_blob = lzma.compress(p_shuffled, preset=preset)
     else:
-        p_blob = b""
+        p_shuffled = b""
+    misc_raw = b"".join(int8_parts) + b"".join(s_parts) + p_shuffled
+    misc_blob = lzma.compress(misc_raw, preset=preset) if misc_raw else b""
     meta_blob = lzma.compress(pickle.dumps({
         "m": m, "manifest": manifest,
         "type_groups": {k: [(n, list(a.shape)) for n, a in v]
                        for k, v in type_groups.items()},
         "q6_total": len(q_arr),
+        "q8_len": sum(len(p) for p in int8_parts),
+        "s_len": sum(len(p) for p in s_parts),
+        "p_len": len(p_shuffled),
     }, protocol=pickle.HIGHEST_PROTOCOL), preset=preset)
 
-    # Pack: magic + [masks][signs][abs_vals][q8][s][p][meta]
+    # Pack: magic + [masks][signs][abs_vals][misc][meta]
     out = io.BytesIO()
     out.write(b"S")  # magic for sparse
-    for blob in (masks_blob, signs_blob, abs_vals_blob, q8_blob, s_blob, p_blob):
+    for blob in (masks_blob, signs_blob, abs_vals_blob, misc_blob):
         out.write(struct.pack("<I", len(blob)))
         out.write(blob)
     out.write(meta_blob)
@@ -949,10 +951,25 @@ def decode_lzma_sparse(blob: bytes) -> dict:
 
     # Read compressed streams
     blobs = []
-    for _ in range(6):
+    for _ in range(4):
         slen = struct.unpack("<I", buf.read(4))[0]
         blobs.append(lzma.decompress(buf.read(slen)) if slen > 0 else b"")
-    combined_masks_raw, signs_raw, abs_vals_raw, q8_raw, s_raw, p_shuffled = blobs
+    combined_masks_raw, signs_raw, abs_vals_raw, misc_raw = blobs
+    meta_obj = pickle.loads(lzma.decompress(buf.read()))
+
+    m_meta = meta_obj["m"]
+    manifest = meta_obj["manifest"]
+    type_groups = meta_obj["type_groups"]
+    q6_total = meta_obj["q6_total"]
+    q8_len = meta_obj["q8_len"]
+    s_len_raw = meta_obj["s_len"]
+    p_len_raw = meta_obj["p_len"]
+
+    # Split misc stream into int8 + scales + passthrough
+    q8_raw = misc_raw[:q8_len]
+    s_raw = misc_raw[q8_len:q8_len + s_len_raw]
+    p_shuffled = misc_raw[q8_len + s_len_raw:q8_len + s_len_raw + p_len_raw]
+
     # Un-shuffle fp32 passthrough
     if p_shuffled:
         p_arr = np.frombuffer(p_shuffled, dtype=np.uint8)
@@ -963,12 +980,6 @@ def decode_lzma_sparse(blob: bytes) -> dict:
         p_raw = p_restored.tobytes()
     else:
         p_raw = b""
-    meta_obj = pickle.loads(lzma.decompress(buf.read()))
-
-    m_meta = meta_obj["m"]
-    manifest = meta_obj["manifest"]
-    type_groups = meta_obj["type_groups"]
-    q6_total = meta_obj["q6_total"]
 
     # Split combined masks back into zero_mask and abs_mask
     mask_packed_len = (q6_total + 7) // 8
