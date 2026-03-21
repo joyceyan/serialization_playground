@@ -4,3 +4,4 @@ exp1_lzma_extreme	15824088	27006130	0.5860	0.0	reverted	torch.save + LZMA extrem
 exp2_transpose	15500303	27006130	0.5740	0.0	kept	transpose 2D tensors + zstd-22
 exp3_separate_streams	15350003	27006130	0.5684	0.0	kept	separate dtype streams + transpose + zstd-22
 exp4_type_grouping	15370267	27006130	0.5691	0.0	reverted	group tensors by type across layers
+exp5_row_interleave	15407265	27006130	0.5705	44.0	reverted	row-interleave same-shape int8 tensors (buggy)

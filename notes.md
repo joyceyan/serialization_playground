@@ -69,3 +69,18 @@ Phase 1 optimized against an MLX smoke-test artifact with 72.5% zero values and 
 **Hypothesis**: Grouping all c_q together, all c_k together, etc. would let zstd find more repeated patterns across layers.
 **Result**: 15,370,267 bytes (+20,264 vs exp3). Worse.
 **Insight**: Alphabetical ordering already groups similarly-named tensors. Reordering by type breaks the natural block-0, block-1, ... sequence that zstd was exploiting for cross-layer delta patterns.
+
+### Exp 5: Row-interleave same-shape int8 tensors — REVERTED
+
+**Hypothesis**: Interleaving rows from tensors of the same shape would create repeating patterns the compressor could exploit.
+**Result**: 15,407,265 bytes (worse + roundtrip error). Broken implementation, and even ignoring the bug, the size was worse.
+**Insight**: Row-interleaving breaks the within-tensor locality that zstd relies on. Abandon this direction.
+
+**Status**: Current best is exp3 at 15,350,003 (-1.05%). Need fundamentally different approaches.
+
+**Next ideas**:
+- Try zstd with higher windowLog/chainLog parameters
+- Byte-shuffle fp16 scales (separate high/low bytes)
+- Analyze per-byte entropy of the int8 stream to find optimization targets
+- Try XOR-based delta between adjacent rows within each tensor
+- Try compressing without transpose to see if transpose is still helping
