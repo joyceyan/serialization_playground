@@ -84,8 +84,18 @@ Phase 1 optimized against an MLX smoke-test artifact with 72.5% zero values and 
 **Result**: 15,446,020 bytes (worse than exp3's 15,350,003). More streams = more zstd frame headers = more overhead.
 **Insight**: 3 streams (int8/fp16/fp32) is the sweet spot. More streams adds overhead that exceeds any distribution-matching benefit.
 
+### Exp 7: Enable long distance matching — REVERTED
+
+**Result**: 15,350,001 bytes (-2 bytes vs exp3). Not worth it.
+
+### Exp 8: Byte-shuffle fp16 and fp32 streams — KEPT
+
+**Hypothesis**: Separating high/low bytes of fp16 and the 4 byte planes of fp32 should create more compressible streams since exponent bytes have low entropy.
+**Result**: 15,335,927 bytes (-14,076 vs exp3, -177,104 vs baseline = -1.14%). New best!
+**Insight**: Despite fp16+fp32 being only 267KB raw, byte-shuffling saves 14KB compressed. The high bytes of fp16 scales are very repetitive (similar exponents across all scales). This is a free win.
+
 **Next ideas**:
-- Pack int6 values (6 bits) into bytes more efficiently — 4 values in 3 bytes
-- Try zstd with enable_ldm (long distance matching)
-- Byte-shuffle fp16 data (separate high/low bytes)
-- Try without transpose (ablation to verify it still helps)
+- Also try byte-shuffling the int8 stream (treat as uint8, separate odd/even patterns?)
+- Pack int6 values into 6-bit representation before compression
+- Try different zstd strategies for the int8 stream
+- Combine with LZMA for just the fp16/fp32 streams
