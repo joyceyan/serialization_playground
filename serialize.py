@@ -161,6 +161,50 @@ def decode_baseline(blob: bytes) -> dict:
 
 
 # ==============================================================================
+# EXPERIMENT: Transpose weight matrices + torch.save + zstd-22
+# Column-major may compress better if columns have more local correlation.
+# ==============================================================================
+
+def encode_transpose_v1(sota_obj: dict) -> bytes:
+    """Transpose 2D weight tensors before torch.save + zstd-22."""
+    if not HAS_ZSTD:
+        raise ImportError("zstandard not installed")
+
+    w = sota_obj["w"]
+    m = sota_obj["m"]
+
+    new_w = {}
+    for key, tensor in w.items():
+        if tensor.ndim == 2:
+            new_w[key] = tensor.t().contiguous()
+        else:
+            new_w[key] = tensor
+
+    buf = io.BytesIO()
+    torch.save({"w": new_w, "m": m}, buf)
+    return zstandard.ZstdCompressor(level=22).compress(buf.getvalue())
+
+
+def decode_transpose_v1(blob: bytes) -> dict:
+    """Decode transposed format."""
+    if not HAS_ZSTD:
+        raise ImportError("zstandard not installed")
+
+    raw = zstandard.ZstdDecompressor().decompress(blob)
+    obj = torch.load(io.BytesIO(raw), map_location="cpu", weights_only=False)
+
+    w = obj["w"]
+    new_w = {}
+    for key, tensor in w.items():
+        if tensor.ndim == 2:
+            new_w[key] = tensor.t().contiguous()
+        else:
+            new_w[key] = tensor
+
+    return {"w": new_w, "m": obj["m"]}
+
+
+# ==============================================================================
 # HELPERS
 # ==============================================================================
 

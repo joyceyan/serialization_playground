@@ -17,7 +17,9 @@ import torch
 from serialize import (
     HAS_ZSTD,
     decode_baseline,
+    decode_transpose_v1,
     encode_baseline,
+    encode_transpose_v1,
     load_and_convert,
     mlx_to_sota_format,
 )
@@ -107,6 +109,7 @@ def test_synthetic() -> None:
 
     if HAS_ZSTD:
         roundtrip_check("baseline (synthetic)", encode_baseline, decode_baseline, sota_obj)
+        roundtrip_check("transpose_v1 (synthetic)", encode_transpose_v1, decode_transpose_v1, sota_obj)
     else:
         print("  SKIP: zstandard not installed")
 
@@ -160,6 +163,7 @@ def test_real_roundtrip() -> None:
 
     sota_obj = load_and_convert(DEFAULT_ARTIFACT)
     roundtrip_check("baseline (real)", encode_baseline, decode_baseline, sota_obj)
+    roundtrip_check("transpose_v1 (real)", encode_transpose_v1, decode_transpose_v1, sota_obj)
 
 
 def main() -> None:

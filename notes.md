@@ -35,4 +35,12 @@ See program.md for full list.
 
 ## Experiment log
 
-(Experiments will be appended below)
+### Experiment 1: Custom binary format (no torch.save)
+- **Hypothesis**: Removing pickle/torch.save overhead and writing raw numpy bytes will reduce compressed size.
+- **Result**: 3,385,337 bytes (+74,807 / +2.3% WORSE). Reverted.
+- **Insight**: torch.save's pickle format actually compresses well under zstd-22. The overhead is negligible in compressed form. Focus on data representation, not container format.
+
+### Experiment 2: True int6 bit-packing (4 values → 3 bytes)
+- **Hypothesis**: Packing int6 values into 6 bits each (25% raw savings) will reduce compressed size.
+- **Result**: 3,638,084 bytes (+327,554 / +9.9% WORSE). Reverted.
+- **Insight**: Bit-packing destroys byte-aligned patterns that zstd-22 exploits very efficiently. With values mostly in [-7,7], each int8 byte has lots of redundant high bits that zstd compresses away. Bit-packing scrambles these patterns. **Key lesson: work WITH the compressor, not against it.**
