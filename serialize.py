@@ -681,6 +681,159 @@ def decode_lzma_typegroup(blob: bytes) -> dict:
 
 
 # ==============================================================================
+# EXPERIMENT: Row-interleave same-type tensors across layers
+# For each tensor type (e.g., attn.c_q), write row 0 from all layers,
+# then row 1 from all layers, etc. Maximizes cross-layer pattern exposure.
+# ==============================================================================
+
+def encode_lzma_interleave(sota_obj: dict) -> bytes:
+    """LZMA extreme with row-interleaved same-type tensors."""
+    w = sota_obj["w"]
+    m = sota_obj["m"]
+    preset = 9 | lzma.PRESET_EXTREME
+
+    # Group .q tensors by type suffix
+    type_groups = {}  # suffix → [(name, arr), ...]
+    s_parts = []
+    p_parts = []
+    manifest = []
+    manifest_order = []  # track order for decoding
+
+    for name in sorted(w.keys()):
+        t = w[name]
+        arr = t.numpy() if isinstance(t, torch.Tensor) else np.asarray(t)
+
+        if name.endswith(".q"):
+            suffix_match = re.match(r"blocks\.\d+\.(.*)", name)
+            suffix = suffix_match.group(1) if suffix_match else name
+            if suffix not in type_groups:
+                type_groups[suffix] = []
+            type_groups[suffix].append((name, arr))
+        elif name.endswith(".scale"):
+            manifest.append((name, str(arr.dtype), list(t.shape), arr.nbytes, "s"))
+            s_parts.append(arr.tobytes())
+        else:
+            if arr.ndim == 2:
+                arr_t = arr.T.copy()
+            else:
+                arr_t = arr
+            manifest.append((name, str(arr.dtype), list(t.shape), arr_t.nbytes, "p"))
+            p_parts.append(arr_t.tobytes())
+
+    # Build interleaved q stream
+    q_bytes = io.BytesIO()
+    for suffix in sorted(type_groups.keys()):
+        group = type_groups[suffix]
+        # All tensors in a group should have same shape
+        shapes = set(arr.shape for _, arr in group)
+        if len(shapes) == 1 and group[0][1].ndim == 2:
+            # Interleave rows: transpose first, then interleave
+            arrays = [arr.T for _, arr in group]
+            n_rows = arrays[0].shape[0]
+            for row in range(n_rows):
+                for arr in arrays:
+                    q_bytes.write(arr[row].tobytes())
+            for name, arr in group:
+                manifest.append((name, str(arr.dtype), list(arr.shape),
+                                arr.T.shape[0] * arr.T.shape[1], "q_interleave"))
+                manifest_order.append(("q_interleave", suffix, name))
+        else:
+            # Different shapes or 1D — just concatenate with transpose
+            for name, arr in group:
+                if arr.ndim == 2:
+                    arr_t = arr.T.copy()
+                else:
+                    arr_t = arr
+                q_bytes.write(arr_t.tobytes())
+                manifest.append((name, str(arr.dtype), list(arr.shape), arr_t.nbytes, "q_plain"))
+
+    q_blob = lzma.compress(q_bytes.getvalue(), preset=preset)
+    s_blob = lzma.compress(b"".join(s_parts), preset=preset) if s_parts else b""
+    p_blob = lzma.compress(b"".join(p_parts), preset=preset) if p_parts else b""
+    meta_blob = lzma.compress(pickle.dumps({"m": m, "manifest": manifest,
+                                            "type_groups": {k: [(n, list(a.shape)) for n, a in v]
+                                                           for k, v in type_groups.items()}},
+                                            protocol=pickle.HIGHEST_PROTOCOL), preset=preset)
+
+    out = io.BytesIO()
+    out.write(b"I")  # magic for interleaved
+    for blob in (q_blob, s_blob, p_blob):
+        out.write(struct.pack("<I", len(blob)))
+        out.write(blob)
+    out.write(meta_blob)
+    return out.getvalue()
+
+
+def decode_lzma_interleave(blob: bytes) -> dict:
+    """Decode row-interleaved LZMA format."""
+    buf = io.BytesIO(blob)
+    assert buf.read(1) == b"I"
+
+    q_len = struct.unpack("<I", buf.read(4))[0]
+    q_raw = lzma.decompress(buf.read(q_len)) if q_len > 0 else b""
+    s_len = struct.unpack("<I", buf.read(4))[0]
+    s_raw = lzma.decompress(buf.read(s_len)) if s_len > 0 else b""
+    p_len = struct.unpack("<I", buf.read(4))[0]
+    p_raw = lzma.decompress(buf.read(p_len)) if p_len > 0 else b""
+    meta_obj = pickle.loads(lzma.decompress(buf.read()))
+
+    m_meta = meta_obj["m"]
+    manifest = meta_obj["manifest"]
+    type_groups = meta_obj["type_groups"]
+    w = {}
+
+    # Decode scale and passthrough streams
+    s_offset = 0
+    p_offset = 0
+    for name, dtype_str, shape, nbytes, stream in manifest:
+        if stream == "s":
+            dt = np.dtype(dtype_str)
+            arr = np.frombuffer(s_raw[s_offset:s_offset + nbytes], dtype=dt).reshape(shape).copy()
+            w[name] = torch.from_numpy(arr)
+            s_offset += nbytes
+        elif stream == "p":
+            dt = np.dtype(dtype_str)
+            if len(shape) == 2:
+                arr = np.frombuffer(p_raw[p_offset:p_offset + nbytes], dtype=dt).reshape(shape[1], shape[0]).T.copy()
+            else:
+                arr = np.frombuffer(p_raw[p_offset:p_offset + nbytes], dtype=dt).reshape(shape).copy()
+            w[name] = torch.from_numpy(arr)
+            p_offset += nbytes
+
+    # Decode q stream: de-interleave
+    q_buf = io.BytesIO(q_raw)
+    for suffix in sorted(type_groups.keys()):
+        group = type_groups[suffix]  # [(name, shape), ...]
+        shapes = set(tuple(s) for _, s in group)
+        if len(shapes) == 1 and len(group[0][1]) == 2:
+            # De-interleave: read row by row across all tensors
+            shape = group[0][1]
+            n_rows = shape[1]  # transposed rows
+            n_cols = shape[0]  # transposed cols
+            n_tensors = len(group)
+            # Read all interleaved data
+            total_bytes = n_rows * n_tensors * n_cols
+            interleaved = np.frombuffer(q_buf.read(total_bytes), dtype=np.int8)
+            interleaved = interleaved.reshape(n_rows, n_tensors, n_cols)
+            for i, (name, _) in enumerate(group):
+                arr = interleaved[:, i, :].T.copy()  # un-transpose
+                w[name] = torch.from_numpy(arr)
+        else:
+            for name, shape in group:
+                nbytes = 1
+                for s in shape:
+                    nbytes *= s
+                raw_bytes = q_buf.read(nbytes)
+                if len(shape) == 2:
+                    arr = np.frombuffer(raw_bytes, dtype=np.int8).reshape(shape[1], shape[0]).T.copy()
+                else:
+                    arr = np.frombuffer(raw_bytes, dtype=np.int8).reshape(shape).copy()
+                w[name] = torch.from_numpy(arr)
+
+    return {"w": w, "m": m_meta}
+
+
+# ==============================================================================
 # HELPERS
 # ==============================================================================
 
