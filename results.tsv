@@ -9,3 +9,4 @@ exp6_fine_streams	15446020	27006130	0.5720	0.0	reverted	split into int6_q/int8_q
 exp7_ldm	15350001	27006130	0.5684	0.0	reverted	enable long distance matching (-2 bytes)
 exp8_byte_shuffle	15335927	27006130	0.5679	0.0	kept	byte-shuffle fp16 and fp32 streams
 exp9_lzma_fp16	15334299	27006130	0.5679	0.0	kept	LZMA extreme for byte-shuffled fp16 stream
+exp10_lzma_int8	15631066	27006130	0.5789	0.0	reverted	LZMA extreme for int8 stream (worse)

@@ -94,8 +94,18 @@ Phase 1 optimized against an MLX smoke-test artifact with 72.5% zero values and 
 **Result**: 15,335,927 bytes (-14,076 vs exp3, -177,104 vs baseline = -1.14%). New best!
 **Insight**: Despite fp16+fp32 being only 267KB raw, byte-shuffling saves 14KB compressed. The high bytes of fp16 scales are very repetitive (similar exponents across all scales). This is a free win.
 
+### Exp 9: LZMA extreme for byte-shuffled fp16 stream — KEPT
+
+**Result**: 15,334,299 bytes (-1,628 from exp8). LZMA is better than zstd for the small, repetitive fp16 data.
+
+### Exp 10: LZMA extreme for int8 stream — REVERTED
+
+**Result**: 15,631,066 bytes (+296,767 vs exp9). LZMA is decisively worse for the large int8 stream. zstd-22's FSE entropy coding and match-finding are better suited for this data.
+
+**Current state**: 15,334,299 (-1.15%). The int8 stream is ~15.1MB and dominates. Need to find ways to make it more compressible.
+
 **Next ideas**:
-- Also try byte-shuffling the int8 stream (treat as uint8, separate odd/even patterns?)
-- Pack int6 values into 6-bit representation before compression
-- Try different zstd strategies for the int8 stream
-- Combine with LZMA for just the fp16/fp32 streams
+- Try zlib/deflate for int8 stream (different algorithm might find different patterns)
+- Offset int6 values to unsigned [0,63] — maybe helps zstd's match finding
+- Try sub-byte packing: pack 4 int6 values into 3 bytes
+- Analyze: what does the byte frequency distribution look like? How uniform is it?
