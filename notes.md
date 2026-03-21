@@ -82,4 +82,13 @@ Approaches that HURT:
 
 ### Exp 12: LZMA EXTREME preset for all streams — KEPT (current best)
 - **Result**: 3,257,949 bytes (-1.6% vs baseline)
-- **Insight**: PRESET_EXTREME squeezes ~10KB more out of LZMA. Encode is similar time, decode unchanged at 151ms.
+- **Insight**: PRESET_EXTREME squeezes ~10KB more out of LZMA.
+
+### Exp 13: LZMA extreme single combined stream — REVERTED
+- **Result**: 3,269,124 bytes. Worse than separate streams. LZMA benefits from per-type homogeneity.
+
+### Exp 14: LZMA with FILTER_DELTA for weight stream — REVERTED
+- **Result**: 3,449,705 bytes (+4.2% worse). Delta filter hurts even inside LZMA. Adjacent bytes not correlated.
+
+### Exp 15: LZMA extreme without transpose — REVERTED
+- **Result**: 3,283,697 bytes. Transpose helps LZMA by ~26KB. Column patterns still compress better.
