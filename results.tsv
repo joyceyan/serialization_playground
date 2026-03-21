@@ -24,3 +24,4 @@ exp21_sign_abs	2977925	17178912	5.77	0.0	kept	Sign+abs split for nonzero values
 exp22_abs_decompose	2957897	17178912	5.81	0.0	kept	Decompose abs into abs==1 mask + abs>1 values (current best, -10.7%)
 exp23_various	-	-	-	-	reverted	Tested: ternary, zstd-for-mask, per-group, sorted — all worse or negligible
 exp24_bshuffle_pt	2951845	17178912	5.82	0.0	kept	Byte-shuffle fp32 passthrough (current best, -10.8%)
+exp25_sparse_sorted	2954777	17178912	5.81	0.0	reverted	Sparse without interleave (3KB worse)
