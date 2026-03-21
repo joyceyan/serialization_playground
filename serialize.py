@@ -173,23 +173,51 @@ def encode_experiment(quant_result: dict[str, Tensor], quant_meta: dict[str, obj
 
     # Build raw byte streams — transpose 2D tensors
     streams = {}
-    for label, keys in [("int8", int8_keys), ("fp16", fp16_keys), ("fp32", fp32_keys)]:
-        parts = []
-        for k in keys:
-            t = quant_result[k]
-            if t.ndim == 2:
-                t = t.t().contiguous()
-            parts.append(t.numpy().tobytes())
-        if parts:
-            streams[label] = comp.compress(b"".join(parts))
+    # int8 stream: just concatenate
+    int8_parts = []
+    for k in int8_keys:
+        t = quant_result[k]
+        if t.ndim == 2:
+            t = t.t().contiguous()
+        int8_parts.append(t.numpy().tobytes())
+    if int8_parts:
+        streams["int8"] = comp.compress(b"".join(int8_parts))
 
-    # Encode metadata: key lists + shapes + quant_meta
+    # fp16 stream: byte-shuffle (separate high and low bytes)
+    fp16_parts = []
+    for k in fp16_keys:
+        t = quant_result[k]
+        if t.ndim == 2:
+            t = t.t().contiguous()
+        fp16_parts.append(t.numpy().tobytes())
+    if fp16_parts:
+        raw = b"".join(fp16_parts)
+        arr = np.frombuffer(raw, dtype=np.uint8)
+        high = arr[0::2].tobytes()  # high bytes
+        low = arr[1::2].tobytes()   # low bytes
+        streams["fp16"] = comp.compress(high + low)
+
+    # fp32 stream: byte-shuffle (4 sub-streams)
+    fp32_parts = []
+    for k in fp32_keys:
+        t = quant_result[k]
+        if t.ndim == 2:
+            t = t.t().contiguous()
+        fp32_parts.append(t.numpy().tobytes())
+    if fp32_parts:
+        raw = b"".join(fp32_parts)
+        arr = np.frombuffer(raw, dtype=np.uint8)
+        shuffled = b"".join(arr[i::4].tobytes() for i in range(4))
+        streams["fp32"] = comp.compress(shuffled)
+
+    # Encode metadata
     header = pickle.dumps({
         "int8_keys": int8_keys,
         "fp16_keys": fp16_keys,
         "fp32_keys": fp32_keys,
         "shapes": {k: list(quant_result[k].shape) for k in _sorted_keys(quant_result)},
         "transposed": {k for k in _sorted_keys(quant_result) if quant_result[k].ndim == 2},
+        "byte_shuffle": True,
         "meta": quant_meta,
     })
     header_c = comp.compress(header)
@@ -219,8 +247,31 @@ def decode_experiment(blob: bytes) -> tuple[dict[str, Tensor], dict[str, object]
 
     header = pickle.loads(decomp.decompress(read_block()))
     int8_raw = decomp.decompress(read_block()) if header["int8_keys"] else b""
-    fp16_raw = decomp.decompress(read_block()) if header["fp16_keys"] else b""
-    fp32_raw = decomp.decompress(read_block()) if header["fp32_keys"] else b""
+    fp16_raw_shuffled = decomp.decompress(read_block()) if header["fp16_keys"] else b""
+    fp32_raw_shuffled = decomp.decompress(read_block()) if header["fp32_keys"] else b""
+
+    # Unshuffle fp16: high bytes then low bytes → interleave
+    if fp16_raw_shuffled and header.get("byte_shuffle"):
+        half = len(fp16_raw_shuffled) // 2
+        high = np.frombuffer(fp16_raw_shuffled[:half], dtype=np.uint8)
+        low = np.frombuffer(fp16_raw_shuffled[half:], dtype=np.uint8)
+        interleaved = np.empty(len(fp16_raw_shuffled), dtype=np.uint8)
+        interleaved[0::2] = high
+        interleaved[1::2] = low
+        fp16_raw = interleaved.tobytes()
+    else:
+        fp16_raw = fp16_raw_shuffled
+
+    # Unshuffle fp32: 4 sub-streams → interleave
+    if fp32_raw_shuffled and header.get("byte_shuffle"):
+        quarter = len(fp32_raw_shuffled) // 4
+        subs = [np.frombuffer(fp32_raw_shuffled[i*quarter:(i+1)*quarter], dtype=np.uint8) for i in range(4)]
+        interleaved = np.empty(len(fp32_raw_shuffled), dtype=np.uint8)
+        for i in range(4):
+            interleaved[i::4] = subs[i]
+        fp32_raw = interleaved.tobytes()
+    else:
+        fp32_raw = fp32_raw_shuffled
 
     dtype_map = {"int8": (torch.int8, int8_raw, np.int8),
                  "fp16": (torch.float16, fp16_raw, np.float16),
@@ -239,7 +290,6 @@ def decode_experiment(blob: bytes) -> tuple[dict[str, Tensor], dict[str, object]
             nbytes = numel * np.dtype(npdt).itemsize
             arr = np.frombuffer(raw, dtype=npdt, count=numel, offset=offsets[label])
             offsets[label] += nbytes
-            # Data was stored transposed, so reshape to transposed shape first
             if k in transposed:
                 t = torch.from_numpy(arr.copy()).reshape(shape[1], shape[0]).t().contiguous()
             else:
