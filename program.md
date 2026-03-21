@@ -94,12 +94,14 @@ LOOP FOREVER:
    cd /Users/jyan/src/serialization_playground && python benchmark.py
    ```
 
-6. **Record results** in `results.tsv` (tab-separated):
+6. **Record results** in `results.tsv` (tab-separated, with status column):
    ```
-   experiment	compressed_bytes	raw_bytes	ratio	max_abs_error	description
+   experiment	compressed_bytes	raw_bytes	ratio	max_abs_error	status	description
    ```
+   The `status` column must be one of: `baseline`, `kept`, or `reverted`.
 
 7. **Update `notes.md`**: Append an entry to the "Experiment log" with the hypothesis, result, and insights. Do this for every experiment — successes and failures both contain useful information.
+   - **Mark kept/reverted clearly** in each entry heading (e.g., "### Exp 8: ... — KEPT" or "— REVERTED").
    - **Update the "Ideas queue"**: Add new ideas sparked by this experiment. Remove ideas you just tried.
 
 8. **Keep/discard decision**:

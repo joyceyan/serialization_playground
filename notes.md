@@ -14,45 +14,59 @@ This simulates the `train_gpt_sota.py` pipeline: `mixed_quantize_int6` → `torc
 
 ### Weight value ranges after int6 re-quantization
 
-Block weights (int6): actual range [-32, 31] but most values within [-20, 20].
-- `attn.c_q/c_k` weights: typically [-12, 12] → could fit int5 [-16, 15]
-- `attn.c_v/proj` weights: typically [-20, 20] → needs int6
-- `mlp.fc` weights: typically [-25, 25] → needs int6
-- `mlp.proj` weights: typically [-12, 12] → could fit int5 [-16, 15]
-- `tok_emb.weight` (int8): [-114, 122] → needs int8
+Block weights (int6): actual range [-32, 31] but actual values in [-7, 7] for this artifact.
+- `attn.c_q/c_k`: [-3, 4] — only 3 bits needed
+- `attn.c_v/proj`: [-6, 5] — 4 bits
+- `mlp.fc`: [-7, 6] — 4 bits
+- `mlp.proj`: [-3, 4] — 3 bits
+- `tok_emb.weight` (int8): [-114, 122] — full 8 bits
 
-### Bit budget analysis
+### Key insight from experiments
 
-For an 11L SOTA model (~26.8M params, ~15.5MB compressed):
-- Int6 values stored in int8 containers waste 2 bits per value
-- True int6 bit-packing (4 values → 3 bytes): 25% reduction in raw weight bytes
-- Mixed int5/int6: additional savings for small-range tensors
-- zstd-22 already exploits some of this redundancy, but true bit-packing gives it denser input
+zstd-22 is VERY good at compressing these int8 arrays with small values. It already handles byte-level redundancy efficiently. Approaches that help:
+- **Separate data streams** (homogeneous data per stream)
+- **Transpose** (column patterns compress better)
+
+Approaches that HURT:
+- Bit-packing (destroys byte alignment zstd exploits)
+- Delta encoding (adjacent values not correlated in weight matrices)
+- Custom binary format (torch.save pickle overhead is negligible after compression)
 
 ## Ideas queue
 
-See program.md for full list.
+- Split int6 .q and int8 .q into separate sub-streams (different value distributions)
+- Byte shuffling for fp16 scales (split high/low bytes)
+- Per-tensor zstd frames (tailored entropy models)
+- Value zigzag encoding (concentrate values near 0)
+- Interleave tensor bytes differently (e.g., row-interleaved across tensors)
+- Try zstd with different windowLog/chainLog parameters
+- Try combining transpose with nibble-level reorganization
+- XOR with predicted values (e.g., XOR each row with previous row)
 
 ## Experiment log
 
-### Experiment 1: Custom binary format (no torch.save)
-- **Hypothesis**: Removing pickle/torch.save overhead and writing raw numpy bytes will reduce compressed size.
-- **Result**: 3,385,337 bytes (+74,807 / +2.3% WORSE). Reverted.
-- **Insight**: torch.save's pickle format actually compresses well under zstd-22. The overhead is negligible in compressed form. Focus on data representation, not container format.
+### Exp 1: Custom binary format (no torch.save) — REVERTED
+- **Result**: 3,385,337 bytes (+2.3% worse)
 
-### Experiment 2: True int6 bit-packing (4 values → 3 bytes)
-- **Hypothesis**: Packing int6 values into 6 bits each (25% raw savings) will reduce compressed size.
-- **Result**: 3,638,084 bytes (+327,554 / +9.9% WORSE). Reverted.
-- **Insight**: Bit-packing destroys byte-aligned patterns that zstd-22 exploits very efficiently. With values mostly in [-7,7], each int8 byte has lots of redundant high bits that zstd compresses away. Bit-packing scrambles these patterns. **Key lesson: work WITH the compressor, not against it.**
+### Exp 2: True int6 bit-packing (4 values → 3 bytes) — REVERTED
+- **Result**: 3,638,084 bytes (+9.9% worse)
 
-### Experiment 3: Transpose weight matrices before compression
-- **Result**: 3,288,084 bytes (-22,446 / -0.7%). KEPT.
+### Exp 3: Transpose weight matrices — KEPT (superseded by exp 7)
+- **Result**: 3,288,084 bytes (-0.7%)
 
-### Experiment 4: Sort rows by scale value + transpose — REVERTED (worse than transpose alone)
-### Experiment 5: Delta encoding + transpose — REVERTED (+33.4% worse, columns not correlated)
-### Experiment 6: Concatenate homogeneous tensors — REVERTED (worse than transpose alone)
+### Exp 4: Sort rows by scale + transpose — REVERTED
+- **Result**: 3,298,115 bytes (worse than transpose alone)
 
-### Experiment 7: Separate zstd-22 streams per data type + transpose
-- **Hypothesis**: Compressing int8 weights, fp16 scales, and passthrough each independently gives each stream its own entropy model.
-- **Result**: 3,275,790 bytes (-34,740 / -1.0%). KEPT — new best.
-- **Insight**: Separate streams DO help. Each data type has a distinct distribution. The per-stream entropy coding is more efficient than one-stream-fits-all. This replaces transpose_v1 as the best scheme.
+### Exp 5: Delta encoding + transpose — REVERTED
+- **Result**: 4,416,026 bytes (+33.4% worse)
+
+### Exp 6: Concatenate homogeneous tensors — REVERTED
+- **Result**: 3,293,403 bytes (worse than transpose alone)
+
+### Exp 7: Separate zstd-22 streams per data type + transpose — KEPT (current best)
+- **Result**: 3,275,790 bytes (-1.0% vs baseline)
+- **Insight**: Each data type gets its own entropy model → more efficient compression.
+
+### Exp 8: zstd dictionary for weight stream — REVERTED
+- **Result**: 3,379,193 bytes (+2.1% worse)
+- **Insight**: 32KB dictionary overhead not recovered. zstd already learns patterns well within a single stream.

@@ -1,4 +1,10 @@
-experiment	compressed_bytes	raw_bytes	ratio	max_abs_error	description
-baseline_torch_zstd22	3310530	17178912	5.19	0.0	torch.save + zstd-22 (SOTA pipeline, 9L MLX artifact re-quantized to int6)
-exp3_transpose	3288084	17178912	5.23	0.0	Transpose 2D weight matrices — KEPT
-exp7_sep_streams	3275790	17178912	5.25	0.0	Separate zstd-22 streams per data type + transpose — KEPT (new best)
+experiment	compressed_bytes	raw_bytes	ratio	max_abs_error	status	description
+baseline_torch_zstd22	3310530	17178912	5.19	0.0	baseline	torch.save + zstd-22 (SOTA pipeline)
+exp1_custom_binary	3385337	17178912	5.07	0.0	reverted	Custom binary format (no torch.save)
+exp2_bitpack_int6	3638084	17178912	4.72	0.0	reverted	True int6 bit-packing (4 values → 3 bytes)
+exp3_transpose	3288084	17178912	5.23	0.0	kept	Transpose 2D weight matrices
+exp4_sort_rows	3298115	17178912	5.21	0.0	reverted	Sort rows by scale + transpose
+exp5_delta	4416026	17178912	3.89	0.0	reverted	Delta encoding + transpose
+exp6_concat	3293403	17178912	5.22	0.0	reverted	Concatenate homogeneous tensors
+exp7_sep_streams	3275790	17178912	5.25	0.0	kept	Separate zstd-22 streams per data type + transpose (current best)
+exp8_dict_streams	3379193	17178912	5.08	0.0	reverted	zstd dictionary for weight stream (32KB dict overhead)
