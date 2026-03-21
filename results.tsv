@@ -1,3 +1,4 @@
 experiment	compressed_bytes	raw_bytes	ratio	max_abs_error	status	description
 baseline	15513031	27006130	0.5744	0.0	baseline	torch.save + zstd-22
 exp1_lzma_extreme	15824088	27006130	0.5860	0.0	reverted	torch.save + LZMA extreme (preset 9)
+exp2_transpose	15500303	27006130	0.5740	0.0	kept	transpose 2D tensors + zstd-22

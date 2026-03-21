@@ -51,3 +51,9 @@ Phase 1 optimized against an MLX smoke-test artifact with 72.5% zero values and 
 **Hypothesis**: LZMA extreme was -1.6% in Phase 1, should transfer to H100 artifact.
 **Result**: 15,824,088 bytes (+311,057, +2.0% worse). LZMA is worse on this data.
 **Insight**: The torch.save pickle format with zstd-22 is already very efficient on this dense data. LZMA's larger block size doesn't help here — the overhead of the .xz container and different compression model hurts. zstd-22 is the compressor to beat, not replace. Future experiments should focus on **preprocessing the data** to be more compressible, not changing the compressor.
+
+### Exp 2: Transpose 2D tensors before compression — KEPT
+
+**Hypothesis**: Transposing makes column values (same output neuron) adjacent, improving compressibility. Was -0.7% in Phase 1.
+**Result**: 15,500,303 bytes (-12,728, -0.08%). Small win.
+**Insight**: Only 0.08% vs 0.7% in Phase 1. The dense H100 weights have less column correlation than the MLX artifact. Still a free win with no downside. Need bigger ideas.
