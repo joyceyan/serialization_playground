@@ -103,6 +103,10 @@ Approaches that HURT:
 - **Result**: 3,250,029 bytes (-1.8% vs baseline, -7,920 vs lzma_extreme)
 - **Insight**: Ordering tensors so all c_q.weight.q across layers are adjacent (instead of sorted by name) gives LZMA cross-layer patterns. Different layers' same-type weights share structural similarity.
 
+### Exp 19: Row-interleave same-type tensors across layers — KEPT (current best)
+- **Result**: 3,248,601 bytes (-1.9% vs baseline, -1,428 vs typegroup)
+- **Insight**: Row-level interleaving gives LZMA even more cross-layer correlation. Corresponding rows from different layers' same-type weights are adjacent → more pattern matches.
+
 ### Value distribution insight (from analysis)
 - 72.5% of int6 values are 0, 12.8% are +1, 12.8% are -1
 - Shannon entropy: 1.235 bits/value
