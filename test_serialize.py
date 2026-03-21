@@ -22,7 +22,9 @@ import torch
 from serialize import (
     HAS_ZSTD,
     decode_baseline,
+    decode_experiment,
     encode_baseline,
+    encode_experiment,
     load_and_quantize,
     measure_scheme,
     mixed_quantize_int6,
@@ -140,6 +142,7 @@ def test_synthetic() -> None:
 
     schemes = [
         ("baseline_zstd22", encode_baseline, decode_baseline),
+        ("experiment", encode_experiment, decode_experiment),
     ]
 
     passed = 0
@@ -171,6 +174,7 @@ def test_real(model_path: str) -> None:
 
     schemes = [
         ("baseline_zstd22", encode_baseline, decode_baseline),
+        ("experiment", encode_experiment, decode_experiment),
     ]
 
     print("Running benchmarks (3 trials each)...\n")

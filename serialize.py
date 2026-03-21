@@ -145,6 +145,41 @@ def decode_baseline(blob: bytes) -> tuple[dict[str, Tensor], dict[str, object]]:
 
 
 # ==============================================================================
+# EXPERIMENT: transpose 2D tensors + zstd-22
+# ==============================================================================
+
+def encode_experiment(quant_result: dict[str, Tensor], quant_meta: dict[str, object]) -> bytes:
+    """Transpose 2D tensors before torch.save + zstd-22."""
+    if not HAS_ZSTD:
+        raise ImportError("zstandard not installed")
+    transposed = {}
+    for k, v in quant_result.items():
+        if v.ndim == 2:
+            transposed[k] = v.t().contiguous()
+        else:
+            transposed[k] = v
+    buf = io.BytesIO()
+    torch.save({"w": transposed, "m": quant_meta}, buf)
+    raw = buf.getvalue()
+    return zstandard.ZstdCompressor(level=22).compress(raw)
+
+
+def decode_experiment(blob: bytes) -> tuple[dict[str, Tensor], dict[str, object]]:
+    """Decode transposed tensors."""
+    if not HAS_ZSTD:
+        raise ImportError("zstandard not installed")
+    raw = zstandard.ZstdDecompressor().decompress(blob)
+    obj = torch.load(io.BytesIO(raw), map_location="cpu", weights_only=False)
+    w = {}
+    for k, v in obj["w"].items():
+        if v.ndim == 2:
+            w[k] = v.t().contiguous()
+        else:
+            w[k] = v
+    return w, obj["m"]
+
+
+# ==============================================================================
 # HELPERS
 # ==============================================================================
 

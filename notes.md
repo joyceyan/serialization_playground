@@ -46,4 +46,8 @@ Phase 1 optimized against an MLX smoke-test artifact with 72.5% zero values and 
 
 ## Experiment log
 
-(Experiments will be appended below once final_model.pt is available)
+### Exp 1: LZMA extreme instead of zstd-22 — REVERTED
+
+**Hypothesis**: LZMA extreme was -1.6% in Phase 1, should transfer to H100 artifact.
+**Result**: 15,824,088 bytes (+311,057, +2.0% worse). LZMA is worse on this data.
+**Insight**: The torch.save pickle format with zstd-22 is already very efficient on this dense data. LZMA's larger block size doesn't help here — the overhead of the .xz container and different compression model hurts. zstd-22 is the compressor to beat, not replace. Future experiments should focus on **preprocessing the data** to be more compressible, not changing the compressor.
