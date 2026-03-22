@@ -181,9 +181,8 @@ def encode_experiment(quant_result: dict[str, Tensor], quant_meta: dict[str, obj
         if t.ndim == 2:
             t = t.t().contiguous()
         arr = t.numpy().astype(np.int16)
-        # Reversed zigzag: 0→0, 1→1, -1→2, 2→3, -2→4, ...
-        # This is: positive v → 2v-1, negative v → -2v, zero → 0
-        zigzag = np.where(arr > 0, 2*arr - 1, -2*arr).astype(np.uint8)
+        # Standard zigzag: 0→0, -1→1, 1→2, -2→3, 2→4, ...
+        zigzag = ((arr << 1) ^ (arr >> 15)).astype(np.uint8)
         int8_parts.append(zigzag.tobytes())
     if int8_parts:
         int8_blob = b"".join(int8_parts)
@@ -342,9 +341,8 @@ def decode_experiment(blob: bytes) -> tuple[dict[str, Tensor], dict[str, object]
     # Reverse zigzag encoding
     if int8_raw_zigzag:
         arr = np.frombuffer(int8_raw_zigzag, dtype=np.uint8).astype(np.int16)
-        # Reversed zigzag decode: odd → positive, even → negative
-        # v=0 → 0, v=1 → 1, v=2 → -1, v=3 → 2, v=4 → -2, ...
-        decoded = np.where(arr % 2 == 1, (arr + 1) // 2, -(arr // 2)).astype(np.int8)
+        # Standard zigzag decode: (v >>> 1) ^ -(v & 1)
+        decoded = ((arr >> 1) ^ -(arr & 1)).astype(np.int8)
         int8_raw = decoded.tobytes()
     else:
         int8_raw = b""
