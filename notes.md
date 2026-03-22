@@ -166,9 +166,12 @@ Phase 1 optimized against an MLX smoke-test artifact with 72.5% zero values and 
 **Result**: 15,334,024 bytes (-275 vs exp9). New best!
 **Insight**: JSON compresses better than pickle (more repetitive structure) and LZMA beats zstd for small data. Using 1-char keys ("i", "f", "g", "s", "t", "b", "m") further reduces size.
 
+### Exp 18: Sign-magnitude split for int8 — REVERTED
+**Result**: 15,597,005 (+0.5% worse). Again, separating byte components loses positional correlations.
+**Key lesson confirmed**: ANY transformation that reorders the int8 bytes away from their natural positional layout makes things WORSE. zstd's strength is in finding positional matches, not in per-symbol entropy coding.
+
 **Remaining ideas**:
-- Sign-magnitude split for int8 (separate sign bits into a bit-vector, magnitude as unsigned)
-- Custom ANS/Huffman encoder (complex implementation)
-- Try compressing fp32 with LZMA too (probably <10 bytes difference)
-- Smaller header by encoding shapes more compactly
-- Try grouping scales with their weight tensors instead of by dtype
+- Try LZMA for fp32 stream (likely <10 bytes difference)
+- Encode tensor shapes more compactly (delta-encode repeated dims)
+- Try zstd with minMatch=4 instead of 3
+- Investigate: would removing 1D tensors from the int8 stream and inlining them in the header help?

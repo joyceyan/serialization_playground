@@ -20,3 +20,4 @@ exp14b_brotli	15334300	27006130	0.5679	0.0	reverted	brotli-11 for int8 (zstd sti
 exp15_sub_filter	17002692	27006130	0.6296	0.0	reverted	PNG sub filter (-9.6% worse)
 exp16_single_frame	15336164	27006130	0.5680	0.0	reverted	single zstd frame (+1.9KB vs multi-stream)
 exp17_json_lzma_header	15334024	27006130	0.5679	0.0	kept	JSON+LZMA header (-275 bytes)
+exp18_sign_magnitude	15597005	27006130	0.5776	0.0	reverted	sign-magnitude split (-0.5% worse)
