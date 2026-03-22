@@ -41,4 +41,5 @@ exp34_merge_fp_streams	15329153	27006130	0.5677	0.0	reverted	merge fp16+fp32 LZM
 exp35_skip_empty_fp32	15329141	27006130	0.5677	0.0	kept	skip empty fp32 block (-4b)
 exp36_lzma2_lp1	15328213	27006130	0.5676	0.0	kept	tuned LZMA2 lp=1 for fp16 (-928b new best!)
 exp37_raw_lzma2_header	15328157	27006130	0.5676	0.0	kept	raw LZMA2 for header (-56b)
+exp38_lzma2_header_tuned	15328120	27006130	0.5676	0.0	kept	LZMA2 lc=0/lp=0/pb=0 for header (-37b)
 exp33_zstd_dict256	15329145	27006130	0.5677	0.0	kept	256-byte zstd dictionary (-1.3KB new best!)
