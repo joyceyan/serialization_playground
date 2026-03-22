@@ -157,8 +157,14 @@ Phase 1 optimized against an MLX smoke-test artifact with 72.5% zero values and 
 - Layout changes (type grouping, row interleaving, fine-grained streams)
 - Parameter tuning (search_log, chain_log, target_length, LDM)
 
-What's left to try:
-- Merge all data into single zstd frame (remove per-stream overhead)
-- Two-pass compression
-- Custom Huffman/ANS on value frequencies
-- Accept -1.15% as near-optimal and focus on reducing decode latency
+### Exp 16: Single zstd frame for all data — REVERTED
+**Result**: 15,336,164 (+1,865 vs multi-stream). Mixing fp16 bytes into the int8 zstd context hurts more than frame overhead costs.
+
+**What's left**: The multi-stream approach with per-stream optimal compression (zstd-22 for int8/fp32, LZMA for fp16) and byte-shuffling is very close to optimal. We've tried 16+ experiments targeting the int8 stream and nothing helps because we're already below per-symbol entropy.
+
+**Remaining ideas**:
+- Compact header encoding (JSON instead of pickle)
+- Use LZMA for header (saves ~50 bytes)
+- Sign-magnitude split for int8 (1 bit-stream for sign, 5/7 bits for magnitude)
+- Custom ANS/Huffman encoder (complex, would need implementation)
+- Frequency table optimization (static Huffman for known distribution)
