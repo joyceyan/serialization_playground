@@ -208,7 +208,13 @@ Size ordering +22KB worse, multithreading identical, XOR had decoder bug.
 
 **Current best: 15,330,719 (-1.175%)**
 
-**Remaining ideas:**
-- Try zigzag + unsigned offset to shift range further
-- Try different value remapping strategies (frequency-based permutation table)
-- More header size optimizations
+### Exp 25-27: Various post-zigzag experiments — ALL REVERTED
+- No transpose with zigzag: +1.2KB worse (transpose still helps)
+- Natural sort order: +436b worse (string sort accidentally better)
+- zstd overlap_log=9: identical (only matters for multi-threaded)
+- zigzag + LZMA: identical (zstd still wins)
+- zstd dictionary: -87KB worse (dict overhead exceeds savings)
+
+**FINAL STATE: 15,330,719 bytes (-182,312 = -1.175% vs baseline)**
+
+This appears to be very close to optimal for this data with standard compression tools. The int8 stream (after zigzag encoding) compresses to ~15.17MB which is well below the per-symbol entropy bound of 15.6MB.
