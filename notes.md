@@ -215,6 +215,13 @@ Size ordering +22KB worse, multithreading identical, XOR had decoder bug.
 - zigzag + LZMA: identical (zstd still wins)
 - zstd dictionary: -87KB worse (dict overhead exceeds savings)
 
-**FINAL STATE: 15,330,719 bytes (-182,312 = -1.175% vs baseline)**
+### Exp 29: Reversed zigzag — KEPT
+**Result**: -188 bytes. Negative values get even (smaller) codes matching their slightly higher frequency.
 
-This appears to be very close to optimal for this data with standard compression tools. The int8 stream (after zigzag encoding) compresses to ~15.17MB which is well below the per-symbol entropy bound of 15.6MB.
+### Exp 32: Indexed header format — KEPT
+**Result**: -80 bytes. Store key names once, reference by index.
+
+### Exp 33: 256-byte zstd dictionary for int8 — KEPT
+**Result**: -1,306 bytes! Dictionary bootstraps compression context. 256 bytes is the minimum trainable size and optimal — larger dicts lose more to overhead. Also makes encoding 14x faster.
+
+**CURRENT STATE: 15,329,145 bytes (-183,886 = -1.185% vs baseline)**
