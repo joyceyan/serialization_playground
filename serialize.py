@@ -186,7 +186,16 @@ def encode_experiment(quant_result: dict[str, Tensor], quant_meta: dict[str, obj
         zigzag = np.where(arr > 0, 2*arr - 1, -2*arr).astype(np.uint8)
         int8_parts.append(zigzag.tobytes())
     if int8_parts:
-        streams["int8"] = comp.compress(b"".join(int8_parts))
+        int8_blob = b"".join(int8_parts)
+        # Train a small dictionary for better compression
+        chunk_size = 65536
+        samples = [int8_blob[i:i+chunk_size] for i in range(0, min(len(int8_blob), 10_000_000), chunk_size)]
+        dict_data = zstandard.train_dictionary(256, samples[:100])
+        dict_bytes = dict_data.as_bytes()
+        comp_dict = zstandard.ZstdCompressor(level=22, dict_data=dict_data)
+        compressed = comp_dict.compress(int8_blob)
+        # Store: [dict_len (2 bytes)] [dict_bytes] [compressed]
+        streams["int8"] = struct.pack("<H", len(dict_bytes)) + dict_bytes + compressed
 
     # fp16 stream: byte-shuffle (separate high and low bytes)
     fp16_parts = []
@@ -266,7 +275,15 @@ def decode_experiment(blob: bytes) -> tuple[dict[str, Tensor], dict[str, object]
         "byte_shuffle": bool(header_json.get("b")),
         "meta": header_json["m"],
     }
-    int8_raw_zigzag = decomp.decompress(read_block()) if header["int8_keys"] else b""
+    int8_block = read_block()
+    if header["int8_keys"] and int8_block:
+        dict_len = struct.unpack_from("<H", int8_block, 0)[0]
+        dict_bytes = int8_block[2:2 + dict_len]
+        dict_data = zstandard.ZstdCompressionDict(dict_bytes)
+        decomp_dict = zstandard.ZstdDecompressor(dict_data=dict_data)
+        int8_raw_zigzag = decomp_dict.decompress(int8_block[2 + dict_len:])
+    else:
+        int8_raw_zigzag = b""
     # Reverse zigzag encoding
     if int8_raw_zigzag:
         arr = np.frombuffer(int8_raw_zigzag, dtype=np.uint8).astype(np.int16)
