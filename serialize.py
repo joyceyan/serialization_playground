@@ -246,8 +246,14 @@ def encode_experiment(quant_result: dict[str, Tensor], quant_meta: dict[str, obj
         elif isinstance(info, dict) and info.get("type") == "int8": type_str += "8"
         else: type_str += "p"
 
+    # Abbreviate key names for compactness
+    def _shorten(k):
+        return k.replace("blocks.", "B").replace(".attn.", ".a.").replace(".mlp.", ".m.").replace(".weight", ".w").replace(".scale", ".s").replace(".proj.", ".p.")
+
+    short_keys = [_shorten(k) for k in all_keys]
+
     header = json.dumps({
-        "k": all_keys,
+        "k": short_keys,
         "i": [all_keys.index(k) for k in int8_keys],
         "f": [all_keys.index(k) for k in fp16_keys],
         "s": [list(quant_result[k].shape) for k in all_keys],
@@ -288,7 +294,10 @@ def decode_experiment(blob: bytes) -> tuple[dict[str, Tensor], dict[str, object]
     header_filters = [{"id": lzma.FILTER_LZMA2, "preset": 9 | lzma.PRESET_EXTREME, "lc": 0, "lp": 0, "pb": 0}]
     header_json = json.loads(lzma.decompress(raw_header, format=lzma.FORMAT_RAW, filters=header_filters))
     # Decode indexed format
-    all_keys = header_json["k"]
+    def _expand(k):
+        return k.replace("B", "blocks.").replace(".a.", ".attn.").replace(".m.", ".mlp.").replace(".w", ".weight").replace(".s", ".scale").replace(".p.", ".proj.")
+
+    all_keys = [_expand(k) for k in header_json["k"]]
     shapes_list = header_json["s"]
     int8_set = set(header_json["i"])
     fp16_set = set(header_json["f"])
