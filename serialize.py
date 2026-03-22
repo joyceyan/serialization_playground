@@ -187,14 +187,15 @@ def encode_fork_baseline(quant_result: dict[str, Tensor], quant_meta: dict[str, 
             continue
         pos += 1
 
-    # Just use zstd-22 with streaming flush_block at each ZIP entry boundary
+    # Streaming zstd-22 with flush_block every 7 ZIP entries (empirically optimal)
     comp = zstandard.ZstdCompressor(level=22, write_content_size=False)
     cctx = comp.compressobj()
     parts = []
     prev = 0
-    for offset, fname in segments[1:]:  # skip first, flush between entries
+    for i, (offset, fname) in enumerate(segments[1:]):
         parts.append(cctx.compress(raw[prev:offset]))
-        parts.append(cctx.flush(zstandard.COMPRESSOBJ_FLUSH_BLOCK))
+        if (i + 1) % 7 == 0:
+            parts.append(cctx.flush(zstandard.COMPRESSOBJ_FLUSH_BLOCK))
         prev = offset
     parts.append(cctx.compress(raw[prev:]))
     parts.append(cctx.flush(zstandard.COMPRESSOBJ_FLUSH_FINISH))
