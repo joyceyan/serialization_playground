@@ -162,9 +162,13 @@ Phase 1 optimized against an MLX smoke-test artifact with 72.5% zero values and 
 
 **What's left**: The multi-stream approach with per-stream optimal compression (zstd-22 for int8/fp32, LZMA for fp16) and byte-shuffling is very close to optimal. We've tried 16+ experiments targeting the int8 stream and nothing helps because we're already below per-symbol entropy.
 
+### Exp 17: JSON+LZMA header encoding — KEPT
+**Result**: 15,334,024 bytes (-275 vs exp9). New best!
+**Insight**: JSON compresses better than pickle (more repetitive structure) and LZMA beats zstd for small data. Using 1-char keys ("i", "f", "g", "s", "t", "b", "m") further reduces size.
+
 **Remaining ideas**:
-- Compact header encoding (JSON instead of pickle)
-- Use LZMA for header (saves ~50 bytes)
-- Sign-magnitude split for int8 (1 bit-stream for sign, 5/7 bits for magnitude)
-- Custom ANS/Huffman encoder (complex, would need implementation)
-- Frequency table optimization (static Huffman for known distribution)
+- Sign-magnitude split for int8 (separate sign bits into a bit-vector, magnitude as unsigned)
+- Custom ANS/Huffman encoder (complex implementation)
+- Try compressing fp32 with LZMA too (probably <10 bytes difference)
+- Smaller header by encoding shapes more compactly
+- Try grouping scales with their weight tensors instead of by dtype
