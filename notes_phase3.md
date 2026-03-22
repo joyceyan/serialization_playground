@@ -131,4 +131,13 @@ These strategies were proven effective in 55+ experiments on the same data. They
 **Result**: 15,359,990 bytes (-6,312 from P3-11 = **-0.99% total**).
 **Insight**: 190 ZIP entries × ~33 bytes of CRC32-related overhead ≈ 6.3KB. Since we compress with zstd-22 which has its own integrity, ZIP CRC32 is pure waste.
 
-**Current best: 15,359,990 (-153,041 = -0.99%)**.
+### Exp P3-13: Skip serialization_id + remove FBXX padding (C++) — KEPT
+
+**Changes** (both in `caffe2/serialize/inline_container.cc`, required rebuild):
+1. Comment out `writeSerializationId()` in `writeEndOfFile()` — saves one ZIP entry
+2. Return 0 from `getPadding()` when `alignment <= 1` — eliminates 4-byte "FBXX" extra field from every ZIP entry
+
+**Result**: 15,359,307 bytes (-683 from P3-12 = **-0.99% total**).
+**Insight**: Each ZIP entry had a mandatory 4-byte "FBXX" padding header even with alignment=1. With 188 entries, that's 752 raw bytes → 605 compressed bytes saved. The serialization_id saved another 78 bytes.
+
+**Current best: 15,359,307 (-153,724 = -0.99%)**.
