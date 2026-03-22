@@ -312,7 +312,7 @@ def _derive_shape(key, D, H, KV, MLP, L, vocab=1024, bigram_dim=128):
     if "attn_scale" in key: return [D]
     if "mlp_scale" in key: return [D]
     if "resid_mix" in key: return [2, D]
-    if "skip_weight" in key: return [L - 1 - 5, D]
+    if "skip_weight" in key: return [L // 2, D]
     if "bigram.proj" in key: return [D, bigram_dim]
     if "bigram.scale" in key: return []
     if "smear" in key and "gate" in key: return [D]
