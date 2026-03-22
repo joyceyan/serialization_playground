@@ -253,8 +253,6 @@ def encode_experiment(quant_result: dict[str, Tensor], quant_meta: dict[str, obj
 
     header = json.dumps({
         "k": short_keys,
-        "i": [all_keys.index(k) for k in int8_keys],
-        "f": [all_keys.index(k) for k in fp16_keys],
         "s": [list(quant_result[k].shape) for k in all_keys],
         "q": type_str,
     }, separators=(",", ":")).encode()
@@ -302,9 +300,10 @@ def decode_experiment(blob: bytes) -> tuple[dict[str, Tensor], dict[str, object]
 
     all_keys = [_expand(k) for k in header_json["k"]]
     shapes_list = header_json["s"]
-    int8_set = set(header_json["i"])
-    fp16_set = set(header_json["f"])
-    fp32_indices = [i for i in range(len(all_keys)) if i not in int8_set and i not in fp16_set]
+    # Derive dtype classification from key suffixes (.q → int8, else → fp16)
+    int8_indices = [i for i, k in enumerate(all_keys) if k.endswith(".q")]
+    fp16_indices = [i for i, k in enumerate(all_keys) if not k.endswith(".q")]
+    fp32_indices = []  # No fp32 in this format
 
     # Reconstruct quant_meta from type_str
     type_str = header_json.get("q", "")
@@ -320,8 +319,8 @@ def decode_experiment(blob: bytes) -> tuple[dict[str, Tensor], dict[str, object]
     quant_meta = {mk: type_map.get(type_str[i], "passthrough") for i, mk in enumerate(meta_keys)}
 
     header = {
-        "int8_keys": [all_keys[i] for i in header_json["i"]],
-        "fp16_keys": [all_keys[i] for i in header_json["f"]],
+        "int8_keys": [all_keys[i] for i in int8_indices],
+        "fp16_keys": [all_keys[i] for i in fp16_indices],
         "fp32_keys": [all_keys[i] for i in fp32_indices],
         "shapes": {all_keys[i]: shapes_list[i] for i in range(len(all_keys))},
         "transposed": set(all_keys[i] for i in range(len(all_keys)) if len(shapes_list[i]) == 2),
