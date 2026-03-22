@@ -87,3 +87,10 @@ These strategies were proven effective in 55+ experiments on the same data. They
 **Hypothesis**: Column-major layout (via .t().contiguous()) improved compression by 0.6KB in Phase 2.
 **Result**: 15,454,015 bytes (+73,559 from P3-3). Much worse!
 **Insight**: Transpose helped in Phase 2 because all int8 data was in ONE contiguous stream. In torch.save, each tensor is a separate ZIP entry, so transposing doesn't help cross-tensor patterns. Worse, it changes the pickle metadata (shape/stride) and may fragment the storage layout differently. **Transpose is NOT applicable to per-tensor ZIP format.**
+
+### Exp P3-5: Reduce storage alignment from 64 to 1 — KEPT
+
+**Hypothesis**: 64-byte alignment pads each of the 184 storage entries, wasting up to 63 bytes per entry.
+**Change**: Hardcoded `_get_storage_alignment()` to return 1.
+**Result**: 15,380,278 bytes (-178 from P3-3). Small but free win.
+**Insight**: The padding compresses away mostly (zstd sees it as zeros), but 178 bytes of overhead remain. The alignment is for mmap performance which we don't need.
