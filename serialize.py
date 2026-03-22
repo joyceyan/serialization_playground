@@ -332,8 +332,12 @@ def decode_experiment(blob: bytes) -> tuple[dict[str, Tensor], dict[str, object]
         dict_c_len = int8_block[0]
         dict_bytes = zlib.decompress(int8_block[1:1 + dict_c_len])
         dict_data = zstandard.ZstdCompressionDict(dict_bytes)
-        decomp_dict = zstandard.ZstdDecompressor(dict_data=dict_data)
-        int8_raw_zigzag = decomp_dict.decompress(int8_block[1 + dict_c_len:])
+        decomp_dict = zstandard.ZstdDecompressor(dict_data=dict_data, max_window_size=2**27)
+        # Calculate expected output size from shapes
+        total_int8 = sum(
+            np.prod(header["shapes"][k]) for k in header["int8_keys"]
+        )
+        int8_raw_zigzag = decomp_dict.decompress(int8_block[1 + dict_c_len:], max_output_size=total_int8)
     else:
         int8_raw_zigzag = b""
     # Reverse zigzag encoding
