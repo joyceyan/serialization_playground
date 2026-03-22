@@ -11,38 +11,38 @@ Baseline size: TBD (waiting for final_model.pt from RunPod).
 Phase 1 optimized against an MLX smoke-test artifact with 72.5% zero values and tiny ranges [-7, 7]. The sparse decomposition (bitmask + signs + abs masks) saved 11.2% locally but **produced a larger artifact than torch.save + zstd-22 on the real H100 model** (16.0MB vs ~15.5MB). The H100 model has dense weights with far fewer zeros.
 
 **Techniques that transfer regardless of sparsity:**
-- Transpose 2D tensors before compression (-0.7%)
-- Separate streams per data type (-1.0%)
-- LZMA extreme over zstd-22 (-1.6%)
-- Group same tensor types across layers (-0.2%)
-- Row-interleave same-type tensors (-0.1%)
+- ~~Transpose 2D tensors before compression (-0.7%)~~ — CONFIRMED in exp 2, small but real (-0.08%), kept
+- ~~Separate streams per data type (-1.0%)~~ — CONFIRMED in exp 3, main contributor (-1.05%), kept
+- ~~LZMA extreme over zstd-22 (-1.6%)~~ — DISPROVED in exp 1, LZMA worse for dense int8 (+2.0%); BUT confirmed for small fp16 stream (exp 9, -1.6KB)
+- ~~Group same tensor types across layers (-0.2%)~~ — DISPROVED in exp 4, worse (+20KB), alphabetical order better
+- ~~Row-interleave same-type tensors (-0.1%)~~ — DISPROVED in exp 5, buggy and worse
 
 **Techniques that DON'T transfer to dense weights:**
-- Sparse decomposition (bitmask + signs + abs masks) — overhead exceeds savings when <30% zeros
-- Bit-packing — destroys byte alignment that zstd/LZMA exploit
-- Delta encoding — adjacent weight values are not correlated
+- Sparse decomposition (bitmask + signs + abs masks) — overhead exceeds savings when <30% zeros (not tried, H100 has only 6-12% zeros)
+- ~~Bit-packing — destroys byte alignment that zstd/LZMA exploit~~ — CONFIRMED in exp 13b (nibble split +12.4% worse)
+- ~~Delta encoding — adjacent weight values are not correlated~~ — CONFIRMED in exp 15 (sub filter -9.6%) and exp 50 (XOR rows -6.7%)
 
-**Techniques that had no effect:**
-- Custom binary format (pickle overhead is negligible after compression)
-- Byte-shuffle fp16 scales (too small to matter)
-- Zigzag encoding (LZMA handles signed int8 well)
-- zstd dictionary (overhead not recovered)
+**Techniques that had no effect (Phase 1 findings, re-evaluated):**
+- ~~Custom binary format (pickle overhead is negligible after compression)~~ — DISPROVED: custom format IS better, saves ~100KB (exp 3). Phase 1 was wrong — pickle overhead matters when combined with dtype separation
+- ~~Byte-shuffle fp16 scales (too small to matter)~~ — DISPROVED: byte-shuffle fp16 saves 14KB (exp 8). Phase 1 underestimated the benefit with LZMA
+- ~~Zigzag encoding (LZMA handles signed int8 well)~~ — DISPROVED: zigzag saves 3.3KB with zstd (exp 24). Phase 1 only tested with LZMA; zstd benefits from zigzag's value clustering
+- ~~zstd dictionary (overhead not recovered)~~ — DISPROVED: 256-byte dictionary saves 1.3KB (exp 33). Phase 1 used too-large dictionaries
 
 ## Ideas queue
 
-**Try first (proven on MLX, likely transfer):**
-- Transpose + separate LZMA extreme streams (the ~3% combined win from Phase 1)
-- Type-grouping + row-interleaving across layers
+**~~Try first (proven on MLX, likely transfer):~~**
+- ~~Transpose + separate LZMA extreme streams (the ~3% combined win from Phase 1)~~ — tried exp 1-3: transpose + separate streams kept, LZMA only for fp16
+- ~~Type-grouping + row-interleaving across layers~~ — tried exp 4-5: both worse
 
-**Try if above works:**
-- LZMA filter chains tuned for dense int6 data
-- Different LZMA dict_size per stream
-- Byte-shuffle int8 data (may help for denser values)
+**~~Try if above works:~~**
+- ~~LZMA filter chains tuned for dense int6 data~~ — tried exp 10, 49: LZMA worse than zstd for int8, delta filter worse for fp16
+- ~~Different LZMA dict_size per stream~~ — not applicable, only fp16 uses LZMA; tuned LZMA2 params instead (exp 36)
+- ~~Byte-shuffle int8 data (may help for denser values)~~ — tried exp 13b (nibble split): catastrophically worse. Byte-level rearrangement destroys LZ77 patterns
 
-**New ideas for dense weights:**
-- Analyze the actual zero rate and value distribution of H100 weights
-- If zero rate is >30%, sparse decomposition may still help partially
-- Per-tensor adaptive strategy: sparse for sparse tensors, direct for dense ones
+**~~New ideas for dense weights:~~**
+- ~~Analyze the actual zero rate and value distribution of H100 weights~~ — done: 6-12% zeros, Laplace distribution, 4.67 bits entropy
+- ~~If zero rate is >30%, sparse decomposition may still help partially~~ — N/A, zero rate is only 6-12%
+- ~~Per-tensor adaptive strategy: sparse for sparse tensors, direct for dense ones~~ — not needed, all tensors are dense
 
 ## Experiment log
 
