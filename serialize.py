@@ -194,8 +194,8 @@ def encode_experiment(quant_result: dict[str, Tensor], quant_meta: dict[str, obj
         dict_bytes = dict_data.as_bytes()
         comp_dict = zstandard.ZstdCompressor(level=22, dict_data=dict_data)
         compressed = comp_dict.compress(int8_blob)
-        # Store: [dict_len (2 bytes)] [dict_bytes] [compressed]
-        streams["int8"] = struct.pack("<H", len(dict_bytes)) + dict_bytes + compressed
+        # Store: [dict_bytes (256)] [compressed] — dict size is always 256
+        streams["int8"] = dict_bytes + compressed
 
     # fp16 stream: byte-shuffle (separate high and low bytes)
     fp16_parts = []
@@ -331,11 +331,10 @@ def decode_experiment(blob: bytes) -> tuple[dict[str, Tensor], dict[str, object]
     }
     int8_block = read_block()
     if header["int8_keys"] and int8_block:
-        dict_len = struct.unpack_from("<H", int8_block, 0)[0]
-        dict_bytes = int8_block[2:2 + dict_len]
+        dict_bytes = int8_block[:256]  # Dictionary is always 256 bytes
         dict_data = zstandard.ZstdCompressionDict(dict_bytes)
         decomp_dict = zstandard.ZstdDecompressor(dict_data=dict_data)
-        int8_raw_zigzag = decomp_dict.decompress(int8_block[2 + dict_len:])
+        int8_raw_zigzag = decomp_dict.decompress(int8_block[256:])
     else:
         int8_raw_zigzag = b""
     # Reverse zigzag encoding
