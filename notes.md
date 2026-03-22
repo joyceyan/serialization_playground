@@ -170,8 +170,36 @@ Phase 1 optimized against an MLX smoke-test artifact with 72.5% zero values and 
 **Result**: 15,597,005 (+0.5% worse). Again, separating byte components loses positional correlations.
 **Key lesson confirmed**: ANY transformation that reorders the int8 bytes away from their natural positional layout makes things WORSE. zstd's strength is in finding positional matches, not in per-symbol entropy coding.
 
-**Remaining ideas**:
-- Try LZMA for fp32 stream (likely <10 bytes difference)
-- Encode tensor shapes more compactly (delta-encode repeated dims)
-- Try zstd with minMatch=4 instead of 3
-- Investigate: would removing 1D tensors from the int8 stream and inlining them in the header help?
+### Exp 19: zstd min_match=4 — REVERTED
+**Result**: +15KB worse. Short 3-byte matches are valuable.
+
+### Exp 20: Adaptive byte-shuffle for fp16 — REVERTED
+**Result**: Identical. Byte-shuffled always wins for this data.
+
+## Summary at experiment 20
+
+**Best result: 15,334,024 bytes (-179,007 = -1.154% vs baseline)**
+
+**What works:**
+1. Custom binary format (no pickle overhead) — main contributor
+2. Separate streams by dtype (int8/fp16/fp32) with per-stream optimal compression
+3. Byte-shuffle for fp16 (high/low byte separation)
+4. LZMA for fp16 stream (better than zstd for small repetitive data)
+5. JSON+LZMA for header (more compact than pickle+zstd)
+6. Transpose 2D tensors (marginal: ~576 bytes)
+7. Byte-shuffle for fp32 (negligible impact but free)
+
+**What doesn't work (on dense int6/int8 neural net weights):**
+- Different compressors for int8 (LZMA, brotli, zlib all worse than zstd-22)
+- Data transformations (unsigned offset, nibble split, sign-magnitude split, prediction filters)
+- Layout changes (type grouping, row interleaving, single frame)
+- Parameter tuning (search_log, chain_log, target_length, min_match, LDM)
+
+**Why further improvement is extremely hard:**
+The int8 stream (26.7MB, 99% of output) is already compressed below its per-symbol entropy bound (4.67 bits → 15.6MB theoretical, actual ~15.1MB). This means zstd is effectively using positional correlations to compress better than any symbol-level approach. Any transformation that disrupts byte positions makes it worse.
+
+**Remaining ideas (increasingly speculative):**
+- Investigate if there's a better tensor ordering than alphabetical
+- Try compressing the same data at different zstd levels (1-22) and pick the min per-tensor
+- Custom ANS encoder tuned to the known value distribution
+- Explore non-standard compression libraries (zpaq, cmix — likely not available)
