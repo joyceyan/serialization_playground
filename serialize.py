@@ -192,7 +192,14 @@ def encode_experiment(quant_result: dict[str, Tensor], quant_meta: dict[str, obj
         dict_data = zstandard.train_dictionary(256, samples[:100])
         dict_bytes = dict_data.as_bytes()
         comp_dict = zstandard.ZstdCompressor(level=22, dict_data=dict_data, write_content_size=False)
-        compressed = comp_dict.compress(int8_blob)
+        # Streaming with flush_block at tensor boundaries for better FSE tables
+        cctx = comp_dict.compressobj()
+        c_parts = []
+        for p in int8_parts:
+            c_parts.append(cctx.compress(p))
+            c_parts.append(cctx.flush(zstandard.COMPRESSOBJ_FLUSH_BLOCK))
+        c_parts.append(cctx.flush(zstandard.COMPRESSOBJ_FLUSH_FINISH))
+        compressed = b"".join(c_parts)
         dict_c = zlib.compress(dict_bytes, 9)
         streams["int8"] = struct.pack("B", len(dict_c)) + dict_c + compressed
 
