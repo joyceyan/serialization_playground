@@ -28,3 +28,5 @@ exp22_multithread	15334024	27006130	0.5679	0.0	reverted	zstd multi-threaded (ide
 exp23_xor_consecutive	N/A	N/A	N/A	N/A	reverted	XOR consecutive same-shape (decoder bug)
 exp24_zigzag	15330719	27006130	0.5678	0.0	kept	zigzag encoding for int8 (-3.3KB new best!)
 exp25_no_transpose_zigzag	15331915	27006130	0.5678	0.0	reverted	no transpose with zigzag (+1.2KB worse)
+exp26_natural_sort	15331155	27006130	0.5678	0.0	reverted	natural sort order (+436b worse)
+exp26b_overlap_log	15330719	27006130	0.5678	0.0	reverted	zstd overlap_log=9 (identical)
