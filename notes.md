@@ -232,7 +232,7 @@ Size ordering +22KB worse, multithreading identical, XOR had decoder bug.
 
 **FINAL STATE: 15,329,141 bytes (-183,890 = -1.185% vs baseline)**
 
-After 42 experiments, this is very close to optimal at **15,327,768 bytes (-1.194%)**. The winning techniques in order of impact:
+After 48 experiments, converged at **15,327,424 bytes (-1.196%)**. The winning techniques in order of impact:
 1. Custom binary format / no pickle: ~100KB savings
 2. Separate streams by dtype: ~50KB
 3. Reversed zigzag encoding: ~3.3KB
@@ -248,3 +248,8 @@ After 42 experiments, this is very close to optimal at **15,327,768 bytes (-1.19
 13. Derive transposed/fp32_keys/byte_shuffle: ~57 bytes
 14. Compact type-string meta: ~199 bytes
 15. Abbreviated key names: ~96 bytes
+16. Derive dtype from key suffixes (remove i/f fields): ~183 bytes
+17. Standard zigzag better than reversed with dict: ~107 bytes
+18. Compressed dictionary (zlib): ~50 bytes
+19. 2-byte header length prefix: 2 bytes
+20. Remove dict_len field: 2 bytes
