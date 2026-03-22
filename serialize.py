@@ -11,6 +11,7 @@ Operates on the SOTA format:
 from __future__ import annotations
 
 import io
+import json
 import lzma
 import pickle
 import re
@@ -210,17 +211,17 @@ def encode_experiment(quant_result: dict[str, Tensor], quant_meta: dict[str, obj
         shuffled = b"".join(arr[i::4].tobytes() for i in range(4))
         streams["fp32"] = comp.compress(shuffled)
 
-    # Encode metadata
-    header = pickle.dumps({
-        "int8_keys": int8_keys,
-        "fp16_keys": fp16_keys,
-        "fp32_keys": fp32_keys,
-        "shapes": {k: list(quant_result[k].shape) for k in _sorted_keys(quant_result)},
-        "transposed": {k for k in _sorted_keys(quant_result) if quant_result[k].ndim == 2},
-        "byte_shuffle": True,
-        "meta": quant_meta,
-    })
-    header_c = comp.compress(header)
+    # Encode metadata as JSON + LZMA (smaller than pickle + zstd)
+    header = json.dumps({
+        "i": int8_keys,
+        "f": fp16_keys,
+        "g": fp32_keys,
+        "s": {k: list(quant_result[k].shape) for k in _sorted_keys(quant_result)},
+        "t": sorted(k for k in _sorted_keys(quant_result) if quant_result[k].ndim == 2),
+        "b": 1,
+        "m": quant_meta,
+    }, separators=(",", ":")).encode()
+    header_c = lzma.compress(header, preset=9 | lzma.PRESET_EXTREME)
 
     # Pack: [header_len(4)] [header_compressed] [int8_len(4)] [int8_compressed] [fp16_len(4)] [fp16_compressed] [fp32_compressed]
     out = struct.pack("<I", len(header_c)) + header_c
@@ -245,7 +246,18 @@ def decode_experiment(blob: bytes) -> tuple[dict[str, Tensor], dict[str, object]
         off += sz
         return data
 
-    header = pickle.loads(decomp.decompress(read_block()))
+    raw_header = read_block()
+    header_json = json.loads(lzma.decompress(raw_header))
+    # Remap short keys to original names for compatibility
+    header = {
+        "int8_keys": header_json["i"],
+        "fp16_keys": header_json["f"],
+        "fp32_keys": header_json["g"],
+        "shapes": header_json["s"],
+        "transposed": set(header_json["t"]),
+        "byte_shuffle": bool(header_json.get("b")),
+        "meta": header_json["m"],
+    }
     int8_raw = decomp.decompress(read_block()) if header["int8_keys"] else b""
     fp16_block = read_block()
     fp16_raw_shuffled = lzma.decompress(fp16_block) if header["fp16_keys"] else b""
