@@ -105,3 +105,9 @@ These strategies were proven effective in 55+ experiments on the same data. They
 ### Exp P3-7: Pickle protocol 5 — REVERTED
 
 **Result**: 15,375,674 bytes (+9,024 from P3-6). Protocol 5 generates a different pickle byte stream that compresses worse. Protocol 2 is optimal for zstd post-compression.
+
+### Exp P3-8: Skip byteorder record — REVERTED
+
+**Result**: +272 bytes worse. The byteorder string creates useful zstd match contexts.
+
+**Current best: 15,366,650 (-146,381 = -0.94%)**. Remaining ideas: merge same-dtype storages, reduce pickle stream, strip ZIP data descriptors (C++ change).
