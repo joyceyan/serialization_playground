@@ -17,3 +17,4 @@ P3-13_skip_serialid	15359912	27006130	0.5687	0.0	kept	skip serialization_id reco
 P3-13b_no_fbxx	15359307	27006130	0.5687	0.0	kept	remove FBXX padding when alignment=1 (C++) (-605b)
 P3-14_short_archname	15360273	27006130	0.5687	0.0	reverted	short archive name "a" (+966b worse)
 P3-15_no_dd	15359380	27006130	0.5687	0.0	reverted	remove DD flag in miniz (+73b worse, false positive)
+P3-16_fp32_shuffle	819512	27006130	N/A	0.0	reverted	fp32 byte-shuffle (BUGGY: misclassified dtypes)
