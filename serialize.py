@@ -263,8 +263,8 @@ def encode_experiment(quant_result: dict[str, Tensor], quant_meta: dict[str, obj
     header_filters = [{"id": lzma.FILTER_LZMA2, "preset": 9 | lzma.PRESET_EXTREME, "lc": 0, "lp": 0, "pb": 0}]
     header_c = lzma.compress(header, format=lzma.FORMAT_RAW, filters=header_filters)
 
-    # Pack: [header_len(4)] [header_compressed] [int8_len(4)] [int8_compressed] [fp16_len(4)] [fp16_compressed] [fp32_len(4)?] [fp32_compressed?]
-    out = struct.pack("<I", len(header_c)) + header_c
+    # Pack: [header_len(2)] [header_compressed] [int8_len(4)] [int8_compressed] [fp16_len(4)] [fp16_compressed] [fp32_len(4)?] [fp32_compressed?]
+    out = struct.pack("<H", len(header_c)) + header_c
     for label in ["int8", "fp16"]:
         blob = streams.get(label, b"")
         out += struct.pack("<I", len(blob)) + blob
@@ -290,7 +290,11 @@ def decode_experiment(blob: bytes) -> tuple[dict[str, Tensor], dict[str, object]
         off += sz
         return data
 
-    raw_header = read_block()
+    # Header uses 2-byte length prefix
+    header_sz = struct.unpack_from("<H", blob, off)[0]
+    off += 2
+    raw_header = blob[off:off + header_sz]
+    off += header_sz
     header_filters = [{"id": lzma.FILTER_LZMA2, "preset": 9 | lzma.PRESET_EXTREME, "lc": 0, "lp": 0, "pb": 0}]
     header_json = json.loads(lzma.decompress(raw_header, format=lzma.FORMAT_RAW, filters=header_filters))
     # Decode indexed format
