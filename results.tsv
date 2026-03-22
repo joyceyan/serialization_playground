@@ -31,3 +31,4 @@ exp25_no_transpose_zigzag	15331915	27006130	0.5678	0.0	reverted	no transpose wit
 exp26_natural_sort	15331155	27006130	0.5678	0.0	reverted	natural sort order (+436b worse)
 exp26b_overlap_log	15330719	27006130	0.5678	0.0	reverted	zstd overlap_log=9 (identical)
 exp27_zigzag_lzma	15330720	27006130	0.5678	0.0	reverted	zigzag+LZMA adaptive (+1b, zstd still wins)
+exp29_reversed_zigzag	15330531	27006130	0.5678	0.0	kept	reversed zigzag (-188b new best!)
