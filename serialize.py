@@ -146,6 +146,37 @@ def decode_baseline(blob: bytes) -> tuple[dict[str, Tensor], dict[str, object]]:
 
 
 # ==============================================================================
+# FORK: torch.save + zstd-22 (uses whichever torch is on PYTHONPATH)
+# ==============================================================================
+# When running with PYTHONPATH=torch_fork_repo, torch.save/load uses the fork.
+# When running normally, these are identical to the baseline.
+
+def encode_fork_baseline(quant_result: dict[str, Tensor], quant_meta: dict[str, object]) -> bytes:
+    """torch.save({"w": ..., "m": ...}) + zstd-22 using the active torch.
+
+    When run via `run_fork.sh`, this uses the forked torch from torch_fork_repo/.
+    Modify torch_fork_repo/torch/serialization.py to change behavior.
+    Modify torch_fork_repo/caffe2/serialize/inline_container.cc for C++ changes
+    (requires rebuild: cd torch_fork_repo && python setup.py build_ext --inplace).
+    """
+    if not HAS_ZSTD:
+        raise ImportError("zstandard not installed")
+    buf = io.BytesIO()
+    torch.save({"w": quant_result, "m": quant_meta}, buf)
+    raw = buf.getvalue()
+    return zstandard.ZstdCompressor(level=22).compress(raw)
+
+
+def decode_fork_baseline(blob: bytes) -> tuple[dict[str, Tensor], dict[str, object]]:
+    """Decode using the active torch."""
+    if not HAS_ZSTD:
+        raise ImportError("zstandard not installed")
+    raw = zstandard.ZstdDecompressor().decompress(blob)
+    obj = torch.load(io.BytesIO(raw), map_location="cpu", weights_only=False)
+    return obj["w"], obj["m"]
+
+
+# ==============================================================================
 # EXPERIMENT: separate streams by dtype, transpose, zstd-22
 # ==============================================================================
 
