@@ -81,3 +81,9 @@ These strategies were proven effective in 55+ experiments on the same data. They
 **Change**: In save path, zigzag-encode int8 storages before writing. In load path, reverse zigzag after reading (using torch ops for speed).
 **Result**: 15,380,456 bytes (-4,496 from P3-1 = **-0.85% total** vs original baseline).
 **Insight**: Zigzag saves ~4.5KB within the torch.save format, similar to Phase 2's 3.3KB. The slightly larger effect may be due to zigzag interacting better with the ZIP structure.
+
+### Exp P3-4: Transpose 2D tensors — REVERTED
+
+**Hypothesis**: Column-major layout (via .t().contiguous()) improved compression by 0.6KB in Phase 2.
+**Result**: 15,454,015 bytes (+73,559 from P3-3). Much worse!
+**Insight**: Transpose helped in Phase 2 because all int8 data was in ONE contiguous stream. In torch.save, each tensor is a separate ZIP entry, so transposing doesn't help cross-tensor patterns. Worse, it changes the pickle metadata (shape/stride) and may fragment the storage layout differently. **Transpose is NOT applicable to per-tensor ZIP format.**
