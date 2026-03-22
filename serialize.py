@@ -234,7 +234,6 @@ def encode_experiment(quant_result: dict[str, Tensor], quant_meta: dict[str, obj
         "f": [all_keys.index(k) for k in fp16_keys],
         "g": [all_keys.index(k) for k in fp32_keys],
         "s": [list(quant_result[k].shape) for k in all_keys],
-        "t": [all_keys.index(k) for k in all_keys if quant_result[k].ndim == 2],
         "b": 1,
         "m": quant_meta,
     }, separators=(",", ":")).encode()
@@ -280,7 +279,7 @@ def decode_experiment(blob: bytes) -> tuple[dict[str, Tensor], dict[str, object]
         "fp16_keys": [all_keys[i] for i in header_json["f"]],
         "fp32_keys": [all_keys[i] for i in header_json["g"]],
         "shapes": {all_keys[i]: shapes_list[i] for i in range(len(all_keys))},
-        "transposed": set(all_keys[i] for i in header_json["t"]),
+        "transposed": set(all_keys[i] for i in range(len(all_keys)) if len(shapes_list[i]) == 2),
         "byte_shuffle": bool(header_json.get("b")),
         "meta": header_json["m"],
     }
