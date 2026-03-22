@@ -44,6 +44,69 @@ Phase 1 optimized against an MLX smoke-test artifact with 72.5% zero values and 
 - ~~If zero rate is >30%, sparse decomposition may still help partially~~ — N/A, zero rate is only 6-12%
 - ~~Per-tensor adaptive strategy: sparse for sparse tensors, direct for dense ones~~ — not needed, all tensors are dense
 
+# Phase 2 — Untried Experiment Ideas
+
+## Priority 1: High expected payoff (preserves byte layout)
+
+### Cross-layer residual coding
+- **Hypothesis**: Predict each tensor position from the same position in the corresponding tensor of the previous layer (e.g., block N `c_q[i,j]` predicted from block N-1 `c_q[i,j]`). Compress the XOR or subtraction residuals instead of raw values.
+- **Why it might work**: Preserves byte positions (critical for zstd), but reduces entropy if cross-layer positional correlation exists.
+- **Pre-check**: Measure cross-layer positional correlation before committing. If <10% of positions match or are within ±1, skip.
+- **Risk**: If weights are uncorrelated across layers (like adjacent values within a row), residuals will have higher entropy — same failure mode as exp 15.
+
+### Tensor ordering by similarity
+- **Hypothesis**: Reorder tensors so the most similar tensors are adjacent in the int8 stream, maximizing cross-tensor LZ77 matches for zstd.
+- **Method**: Compute pairwise similarity (L1 histogram distance or cosine) between tensors. Greedy nearest-neighbor ordering.
+- **Why it might work**: Exp 4 (group by type) and exp 26 (natural sort) both tried fixed orderings. This is data-driven ordering optimized for compressibility. Doesn't disrupt intra-tensor byte layout.
+- **Risk**: Current string-sort order may already be near-optimal by accident. Overhead of storing the ordering in the header.
+
+## Priority 2: Diagnostic / headroom tests
+
+### Context-mixing compressor (cmix / zpaq / paq8)
+- **Hypothesis**: CM compressors use neural-net-based prediction and can exploit higher-order statistical patterns that LZ77+FSE misses.
+- **Why try it**: Not an LZ-family algorithm — genuinely different compression model. Every compressor you've tested (zstd, LZMA, brotli, zlib) is LZ-based or LZ+entropy. This tells you how much headroom exists beyond zstd.
+- **Method**: Benchmark `zpaq -m5` or `cmix` on the raw int8 stream. Compare to zstd-22.
+- **Risk**: Extremely slow encode (minutes to hours). Only useful if the size target matters more than encode time.
+
+### Two-pass compression
+- **Hypothesis**: The zstd output (Huffman tables, match offsets, literal bytes) has its own statistical structure that a second compressor can exploit.
+- **Method**: zstd-22 the int8 stream, then LZMA or zpaq the resulting frame.
+- **Risk**: Usually yields <0.1% on already-optimal compression. Quick to test though.
+
+## Priority 3: Structural transforms
+
+### Weight matrix row/column permutation
+- **Hypothesis**: Row and column order within a weight matrix is arbitrary (permute the corresponding dimension in adjacent layers to preserve model behavior). Search for a permutation that maximizes adjacent-row similarity.
+- **Why it might work**: Lossless, doesn't change model behavior, increases intra-tensor redundancy for zstd.
+- **Risk**: Search space is factorial — need a heuristic (greedy nearest-neighbor row ordering by L1 distance). Must also permute downstream matrices consistently, adding complexity to the encoder/decoder.
+
+### 6-bit packing + CM compressor
+- **Hypothesis**: Pack 4 int6 values into 3 bytes (24 bits). Bit-packing destroyed zstd performance (exp 13b), but a CM compressor doesn't rely on byte-aligned LZ77 matches.
+- **Method**: 6-bit pack the zigzag-encoded int8 stream → compress with zpaq/cmix. Compare to zstd-22 on unpacked data.
+- **Risk**: Only viable if CM compressor is acceptable for your use case (slow encode). If zstd is required, skip this.
+
+### Per-block ANS with custom frequency tables
+- **Hypothesis**: zstd uses FSE (a form of tANS) with frequency tables per block, but the block boundaries and table granularity are generic. A custom tANS encoder with per-4KB frequency tables tuned to the int8 distribution could beat zstd's entropy backend.
+- **Method**: Use `finiteStateEntropy` library. Keep zstd's LZ77 match-finding (via `ZSTD_getSequences`), replace entropy backend.
+- **Risk**: Extremely complex to implement. Marginal gains likely <0.1%.
+
+## Phase 2 Experiment Results (from ideas above)
+
+### Cross-layer residual coding — SKIPPED (pre-check failed)
+Measured cross-layer correlation: exact match 4.2-7.5% (random=1.5%), within±1 12.6-22.4% (random=4.7%). Correlation exists but is too weak. Residual entropy (4.98 bits) is HIGHER than raw entropy (4.48 bits). Expected -1.5MB worse.
+
+### Tensor ordering by similarity — TESTED, REVERTED
+L1 histogram distance greedy ordering: +3.7KB worse. Cosine similarities between tensors all in 0.52-0.61 range (near random). No useful signal for ordering.
+
+### zpaq -m5 (context mixing) — DIAGNOSTIC ONLY
+Result: 15,034,441 bytes vs zstd+dict 15,172,410 bytes. **138KB (0.91%) headroom** exists beyond zstd. But encode/decode both take ~64 seconds — far too slow for practical use.
+
+### Two-pass compression — TESTED, ALL WORSE
+zstd→LZMA: +814 bytes. zstd→zstd: +357 bytes. zstd→zlib: +4,183 bytes. Compressed data looks random.
+
+### Row permutation — SKIPPED (pre-check failed)
+Adjacent row matches: 6.16% (original) vs 6.30% (best sort). Rows are independent. Permutation overhead would exceed savings.
+
 ## Experiment log
 
 ### Exp 1: LZMA extreme instead of zstd-22 — REVERTED
