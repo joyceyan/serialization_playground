@@ -228,12 +228,30 @@ def encode_experiment(quant_result: dict[str, Tensor], quant_meta: dict[str, obj
 
     # Encode metadata as JSON + LZMA — indexed format for compactness
     all_keys = _sorted_keys(quant_result)
+    # Compact meta: derive meta_keys from tensor keys, encode types as string
+    meta_keys = []
+    for k in all_keys:
+        if k.endswith(".q") or k.endswith(".scale"):
+            base = k.rsplit(".", 1)[0]
+            if base not in meta_keys:
+                meta_keys.append(base)
+        elif k not in meta_keys:
+            meta_keys.append(k)
+    type_str = ""
+    for mk in meta_keys:
+        info = quant_meta.get(mk, "passthrough")
+        if info == "passthrough": type_str += "p"
+        elif info == "passthrough_ctrl": type_str += "c"
+        elif isinstance(info, dict) and info.get("type") == "int6": type_str += "6"
+        elif isinstance(info, dict) and info.get("type") == "int8": type_str += "8"
+        else: type_str += "p"
+
     header = json.dumps({
         "k": all_keys,
         "i": [all_keys.index(k) for k in int8_keys],
         "f": [all_keys.index(k) for k in fp16_keys],
         "s": [list(quant_result[k].shape) for k in all_keys],
-        "m": quant_meta,
+        "q": type_str,
     }, separators=(",", ":")).encode()
     # Raw LZMA2 for header too (saves ~32 bytes of .xz container overhead)
     header_filters = [{"id": lzma.FILTER_LZMA2, "preset": 9 | lzma.PRESET_EXTREME, "lc": 0, "lp": 0, "pb": 0}]
@@ -275,6 +293,20 @@ def decode_experiment(blob: bytes) -> tuple[dict[str, Tensor], dict[str, object]
     int8_set = set(header_json["i"])
     fp16_set = set(header_json["f"])
     fp32_indices = [i for i in range(len(all_keys)) if i not in int8_set and i not in fp16_set]
+
+    # Reconstruct quant_meta from type_str
+    type_str = header_json.get("q", "")
+    meta_keys = []
+    for k in all_keys:
+        if k.endswith(".q") or k.endswith(".scale"):
+            base = k.rsplit(".", 1)[0]
+            if base not in meta_keys:
+                meta_keys.append(base)
+        elif k not in meta_keys:
+            meta_keys.append(k)
+    type_map = {"p": "passthrough", "c": "passthrough_ctrl", "6": {"type": "int6"}, "8": {"type": "int8"}}
+    quant_meta = {mk: type_map.get(type_str[i], "passthrough") for i, mk in enumerate(meta_keys)}
+
     header = {
         "int8_keys": [all_keys[i] for i in header_json["i"]],
         "fp16_keys": [all_keys[i] for i in header_json["f"]],
@@ -282,7 +314,7 @@ def decode_experiment(blob: bytes) -> tuple[dict[str, Tensor], dict[str, object]
         "shapes": {all_keys[i]: shapes_list[i] for i in range(len(all_keys))},
         "transposed": set(all_keys[i] for i in range(len(all_keys)) if len(shapes_list[i]) == 2),
         "byte_shuffle": True,
-        "meta": header_json["m"],
+        "meta": quant_meta,
     }
     int8_block = read_block()
     if header["int8_keys"] and int8_block:
