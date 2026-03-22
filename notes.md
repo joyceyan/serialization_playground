@@ -135,9 +135,19 @@ Phase 1 optimized against an MLX smoke-test artifact with 72.5% zero values and 
 
 **Strategy pivot**: We're at 15,334,299 (-1.15%) and running out of incremental ideas for the int8 stream. Need to think about this differently:
 
-**Next ideas (more radical)**:
-- Try compressing the whole combined blob (header + all streams) as a single zstd frame instead of per-stream
-- Try a fundamentally different layout: interleave scale bytes with their weight bytes
-- Try zstd dictionary trained on the data itself (dict stored in header)
-- Use Brotli instead of zstd (pip install brotli) — different algorithm entirely
-- Accept we're near optimal and try to eke out bytes elsewhere
+### Exp 14: zstd target_length=4096 — REVERTED
+**Result**: Identical. Default is already optimal.
+
+### Exp 14b: Brotli-11 for int8 stream — REVERTED
+**Result**: zstd-22 is still smaller. Brotli can't beat zstd on this data.
+
+**Assessment at exp 14**: We've exhausted compression algorithm improvements. zstd-22 is optimal for the int8 stream. We're below per-symbol entropy. The int8 stream accounts for 99% of the output. Any further gains must come from:
+
+1. **Reducing the raw data size** before compression (lossy or bit-packing that preserves compressibility)
+2. **Two-pass compression**: compress, then compress again
+3. **Prediction + residual**: use row/column neighbors to predict values, compress the residuals
+
+**Next ideas**:
+- Two-pass: zstd-22 → zstd (or zlib) on the compressed output
+- XOR each row with the mean-quantized row (prediction-based)
+- Try compressing int8 data as 2D images using PNG-style prediction filters (sub, up, average, Paeth)

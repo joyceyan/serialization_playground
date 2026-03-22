@@ -15,3 +15,5 @@ exp11b_zlib_adaptive	15334299	27006130	0.5679	0.0	reverted	adaptive zstd/zlib (z
 exp12_no_transpose	15334875	27006130	0.5679	0.0	reverted	ablation: no transpose (+576b)
 exp13_zstd_params	15334298	27006130	0.5679	0.0	reverted	higher search_log/chain_log (-1 byte)
 exp13b_nibble_split	17443868	27006130	0.6459	0.0	reverted	nibble split int8 (+12.4% worse)
+exp14_zstd_target	15334299	27006130	0.5679	0.0	reverted	zstd target_length=4096 (identical)
+exp14b_brotli	15334300	27006130	0.5679	0.0	reverted	brotli-11 for int8 (zstd still wins)
