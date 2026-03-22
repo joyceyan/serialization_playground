@@ -147,7 +147,18 @@ Phase 1 optimized against an MLX smoke-test artifact with 72.5% zero values and 
 2. **Two-pass compression**: compress, then compress again
 3. **Prediction + residual**: use row/column neighbors to predict values, compress the residuals
 
-**Next ideas**:
-- Two-pass: zstd-22 → zstd (or zlib) on the compressed output
-- XOR each row with the mean-quantized row (prediction-based)
-- Try compressing int8 data as 2D images using PNG-style prediction filters (sub, up, average, Paeth)
+### Exp 15: PNG-style sub filter — REVERTED
+**Result**: 17,002,692 bytes (-9.6% worse). Adjacent values in a row are independent — differences have higher entropy than raw values.
+**Insight**: Neural net weights are NOT images. They lack spatial correlation. Any prediction-based filter will make things worse because residuals have higher entropy.
+
+**At 15 experiments, we've converged to -1.15%**. Approaches tried and failed:
+- Different compressors (LZMA, zlib, brotli)
+- Data transformations (unsigned offset, nibble split, prediction filter)
+- Layout changes (type grouping, row interleaving, fine-grained streams)
+- Parameter tuning (search_log, chain_log, target_length, LDM)
+
+What's left to try:
+- Merge all data into single zstd frame (remove per-stream overhead)
+- Two-pass compression
+- Custom Huffman/ANS on value frequencies
+- Accept -1.15% as near-optimal and focus on reducing decode latency
