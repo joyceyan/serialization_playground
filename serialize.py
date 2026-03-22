@@ -193,7 +193,6 @@ def encode_experiment(quant_result: dict[str, Tensor], quant_meta: dict[str, obj
         dict_bytes = dict_data.as_bytes()
         comp_dict = zstandard.ZstdCompressor(level=22, dict_data=dict_data)
         compressed = comp_dict.compress(int8_blob)
-        # Store: [dict_compressed_len (1 byte)] [dict_compressed] [compressed]
         dict_c = zlib.compress(dict_bytes, 9)
         streams["int8"] = struct.pack("B", len(dict_c)) + dict_c + compressed
 
