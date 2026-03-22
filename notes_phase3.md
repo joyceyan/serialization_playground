@@ -74,3 +74,10 @@ These strategies were proven effective in 55+ experiments on the same data. They
 **Hypothesis**: Putting largest tensors first within each dtype group would help zstd build better context.
 **Result**: 15,579,437 bytes (+194,485 vs P3-1, worse than original baseline!). Sorting by size completely breaks the natural tensor ordering that zstd exploits. The original insertion order preserves layer-by-layer locality which is critical.
 **Insight**: Within each dtype group, the natural pickle traversal order (which follows dict insertion order = layer-by-layer) is optimal. Only the inter-dtype ordering should be changed.
+
+### Exp P3-3: Zigzag encoding for int8 storages — KEPT
+
+**Hypothesis**: Zigzag encoding (signed→unsigned: 0,-1,1,-2,... → 0,1,2,3,...) clusters frequent values near byte 0, improving zstd compression. Phase 2 showed -3.3KB.
+**Change**: In save path, zigzag-encode int8 storages before writing. In load path, reverse zigzag after reading (using torch ops for speed).
+**Result**: 15,380,456 bytes (-4,496 from P3-1 = **-0.85% total** vs original baseline).
+**Insight**: Zigzag saves ~4.5KB within the torch.save format, similar to Phase 2's 3.3KB. The slightly larger effect may be due to zigzag interacting better with the ZIP structure.

@@ -3,3 +3,4 @@ torch_save_baseline	15513031	27006130	0.5744	0.0	baseline	torch.save + zstd-22 (
 fork_baseline	15513031	27006130	0.5744	0.0	baseline	torch_save_fork + zstd-22 (byte-identical to torch.save)
 P3-1_dtype_reorder	15384952	27006130	0.5697	0.0	kept	reorder storages by dtype (int8→fp16→fp32)
 P3-2_size_sort	15579437	27006130	0.5769	0.0	reverted	sort by size within dtype (+194KB worse!)
+P3-3_zigzag_int8	15380456	27006130	0.5695	0.0	kept	zigzag encode int8 storages (-4.5KB from P3-1)
