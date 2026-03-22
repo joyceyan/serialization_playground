@@ -94,3 +94,10 @@ These strategies were proven effective in 55+ experiments on the same data. They
 **Change**: Hardcoded `_get_storage_alignment()` to return 1.
 **Result**: 15,380,278 bytes (-178 from P3-3). Small but free win.
 **Insight**: The padding compresses away mostly (zstd sees it as zeros), but 178 bytes of overhead remain. The alignment is for mmap performance which we don't need.
+
+### Exp P3-6: Byte-shuffle fp16 storages — KEPT
+
+**Hypothesis**: Separating high/low bytes of fp16 values exposes repetitive exponent bytes. Phase 2 showed -14KB.
+**Change**: In save path, byte-shuffle fp16 storages ≥64 bytes. In load path, reverse with torch ops.
+**Result**: 15,366,650 bytes (-13,628 from P3-5 = **-0.94% total**). Major win!
+**Insight**: Byte-shuffle works well even with per-tensor ZIP entries because each fp16 tensor individually benefits from high/low byte separation. The exponent bytes are very repetitive within each scale tensor.
