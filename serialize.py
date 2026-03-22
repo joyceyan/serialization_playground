@@ -191,7 +191,7 @@ def encode_experiment(quant_result: dict[str, Tensor], quant_meta: dict[str, obj
         samples = [int8_blob[i:i+chunk_size] for i in range(0, min(len(int8_blob), 10_000_000), chunk_size)]
         dict_data = zstandard.train_dictionary(256, samples[:100])
         dict_bytes = dict_data.as_bytes()
-        comp_dict = zstandard.ZstdCompressor(level=22, dict_data=dict_data)
+        comp_dict = zstandard.ZstdCompressor(level=22, dict_data=dict_data, write_content_size=False)
         compressed = comp_dict.compress(int8_blob)
         dict_c = zlib.compress(dict_bytes, 9)
         streams["int8"] = struct.pack("B", len(dict_c)) + dict_c + compressed
