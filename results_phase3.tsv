@@ -1,0 +1,4 @@
+experiment	compressed_bytes	raw_bytes	ratio	max_abs_error	status	description
+torch_save_baseline	15513031	27006130	0.5744	0.0	baseline	torch.save + zstd-22 (original)
+fork_baseline	15513031	27006130	0.5744	0.0	baseline	torch_save_fork + zstd-22 (byte-identical to torch.save)
+P3-1_dtype_reorder	15384952	27006130	0.5697	0.0	kept	reorder storages by dtype (int8→fp16→fp32)
