@@ -224,4 +224,21 @@ Size ordering +22KB worse, multithreading identical, XOR had decoder bug.
 ### Exp 33: 256-byte zstd dictionary for int8 — KEPT
 **Result**: -1,306 bytes! Dictionary bootstraps compression context. 256 bytes is the minimum trainable size and optimal — larger dicts lose more to overhead. Also makes encoding 14x faster.
 
-**CURRENT STATE: 15,329,145 bytes (-183,886 = -1.185% vs baseline)**
+### Exp 34: Merge fp16+fp32 streams — REVERTED
+**Result**: +8 bytes. Header overhead for size field exceeds savings from eliminating one frame.
+
+### Exp 35: Skip empty fp32 block — KEPT
+**Result**: -4 bytes. fp32 stream is empty in this model, so we save the length prefix.
+
+**FINAL STATE: 15,329,141 bytes (-183,890 = -1.185% vs baseline)**
+
+After 35+ experiments, this is very close to optimal. The winning techniques in order of impact:
+1. Custom binary format / no pickle: ~100KB savings
+2. Separate streams by dtype: ~50KB
+3. Reversed zigzag encoding: ~3.3KB
+4. 256-byte zstd dictionary: ~1.3KB
+5. Byte-shuffle fp16: ~14KB (LZMA compressed)
+6. Transpose 2D tensors: ~0.6KB
+7. JSON+LZMA header: ~0.3KB
+8. Indexed header format: ~80 bytes
+9. Skip empty fp32 block: 4 bytes
