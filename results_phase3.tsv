@@ -15,3 +15,4 @@ P3-11_no_content_size	15366302	27006130	0.5690	0.0	kept	outer zstd write_content
 P3-12_no_crc32	15359990	27006130	0.5687	0.0	kept	disable CRC32 in ZIP (-6.3KB!)
 P3-13_skip_serialid	15359912	27006130	0.5687	0.0	kept	skip serialization_id record (C++) (-78b)
 P3-13b_no_fbxx	15359307	27006130	0.5687	0.0	kept	remove FBXX padding when alignment=1 (C++) (-605b)
+P3-14_short_archname	15360273	27006130	0.5687	0.0	reverted	short archive name "a" (+966b worse)

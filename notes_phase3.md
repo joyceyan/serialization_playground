@@ -140,4 +140,7 @@ These strategies were proven effective in 55+ experiments on the same data. They
 **Result**: 15,359,307 bytes (-683 from P3-12 = **-0.99% total**).
 **Insight**: Each ZIP entry had a mandatory 4-byte "FBXX" padding header even with alignment=1. With 188 entries, that's 752 raw bytes → 605 compressed bytes saved. The serialization_id saved another 78 bytes.
 
+### Exp P3-14: Short archive name "a" — REVERTED
+**Result**: +966 bytes worse. The long "archive/" prefix is highly compressible (187 identical repetitions). Shorter prefix reduces repetition, hurting zstd.
+
 **Current best: 15,359,307 (-153,724 = -0.99%)**.
