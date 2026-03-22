@@ -7,3 +7,4 @@ P3-3_zigzag_int8	15380456	27006130	0.5695	0.0	kept	zigzag encode int8 storages (
 P3-4_transpose	15454015	27006130	0.5722	0.0	reverted	transpose 2D tensors (+73KB worse)
 P3-5_align1	15380278	27006130	0.5695	0.0	kept	storage alignment=1 (-178b)
 P3-6_byte_shuffle_fp16	15366650	27006130	0.5690	0.0	kept	byte-shuffle fp16 storages (-13.6KB!)
+P3-7_pickle5	15375674	27006130	0.5693	0.0	reverted	pickle protocol 5 (+9KB worse)

@@ -101,3 +101,7 @@ These strategies were proven effective in 55+ experiments on the same data. They
 **Change**: In save path, byte-shuffle fp16 storages ≥64 bytes. In load path, reverse with torch ops.
 **Result**: 15,366,650 bytes (-13,628 from P3-5 = **-0.94% total**). Major win!
 **Insight**: Byte-shuffle works well even with per-tensor ZIP entries because each fp16 tensor individually benefits from high/low byte separation. The exponent bytes are very repetitive within each scale tensor.
+
+### Exp P3-7: Pickle protocol 5 — REVERTED
+
+**Result**: 15,375,674 bytes (+9,024 from P3-6). Protocol 5 generates a different pickle byte stream that compresses worse. Protocol 2 is optimal for zstd post-compression.
