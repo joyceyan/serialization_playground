@@ -260,7 +260,7 @@ def encode_experiment(quant_result: dict[str, Tensor], quant_meta: dict[str, obj
 
     header = json.dumps({
         "k": short_keys,
-        "s": [list(quant_result[k].shape) for k in all_keys],
+        "a": [512, 8, 4, 3, 11, 1024, 128],  # [D, H, KV, MLP, L, vocab, bigram_dim]
         "q": type_str,
     }, separators=(",", ":")).encode()
     # Raw LZMA2 for header too (saves ~32 bytes of .xz container overhead)
@@ -277,6 +277,46 @@ def encode_experiment(quant_result: dict[str, Tensor], quant_meta: dict[str, obj
     if fp32_blob:
         out += struct.pack("<I", len(fp32_blob)) + fp32_blob
     return out
+
+
+def _derive_shape(key, D, H, KV, MLP, L, vocab=1024, bigram_dim=128):
+    """Derive tensor shape from key name and architecture params."""
+    hd = D // H
+    kv = KV * hd
+    mlp = D * MLP
+    bigram_vocab = vocab * 2
+
+    if key.endswith(".q"):
+        base = key[:-2]
+        if "c_q" in base: return [D, D]
+        if "c_k" in base: return [kv, D]
+        if "c_v" in base: return [kv, D]
+        if ".attn." in base and "proj" in base: return [D, D]
+        if "mlp.fc" in base: return [mlp, D]
+        if ".mlp." in base and "proj" in base: return [D, mlp]
+        if "tok_emb" in base: return [vocab, D]
+        if "bigram.embed" in base: return [bigram_vocab, bigram_dim]
+
+    if key.endswith(".scale"):
+        base = key[:-6]
+        if "c_q" in base: return [D]
+        if "c_k" in base: return [kv]
+        if "c_v" in base: return [kv]
+        if ".attn." in base and "proj" in base: return [D]
+        if "mlp.fc" in base: return [mlp]
+        if ".mlp." in base and "proj" in base: return [D]
+        if "tok_emb" in base: return [vocab]
+        if "bigram.embed" in base: return [bigram_vocab]
+
+    if "q_gain" in key: return [H]
+    if "attn_scale" in key: return [D]
+    if "mlp_scale" in key: return [D]
+    if "resid_mix" in key: return [2, D]
+    if "skip_weight" in key: return [L - 1 - 5, D]
+    if "bigram.proj" in key: return [D, bigram_dim]
+    if "bigram.scale" in key: return []
+    if "smear" in key and "gate" in key: return [D]
+    return []
 
 
 def decode_experiment(blob: bytes) -> tuple[dict[str, Tensor], dict[str, object]]:
@@ -306,7 +346,12 @@ def decode_experiment(blob: bytes) -> tuple[dict[str, Tensor], dict[str, object]
         return k.replace("B", "blocks.").replace(".a.", ".attn.").replace(".m.", ".mlp.").replace(".w", ".weight").replace(".s", ".scale").replace(".p.", ".proj.")
 
     all_keys = [_expand(k) for k in header_json["k"]]
-    shapes_list = header_json["s"]
+    # Derive shapes from architecture params
+    arch = header_json["a"]
+    D, H, KV, MLP, L = arch[:5]
+    vocab = arch[5] if len(arch) > 5 else 1024
+    bigram_dim = arch[6] if len(arch) > 6 else 128
+    shapes_list = [_derive_shape(k, D, H, KV, MLP, L, vocab, bigram_dim) for k in all_keys]
     # Derive dtype classification from key suffixes (.q → int8, else → fp16)
     int8_indices = [i for i, k in enumerate(all_keys) if k.endswith(".q")]
     fp16_indices = [i for i, k in enumerate(all_keys) if not k.endswith(".q")]
