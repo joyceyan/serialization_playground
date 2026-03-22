@@ -161,6 +161,7 @@ def encode_fork_baseline(quant_result: dict[str, Tensor], quant_meta: dict[str, 
     """
     if not HAS_ZSTD:
         raise ImportError("zstandard not installed")
+
     buf = io.BytesIO()
     torch.serialization.set_crc32_options(False)
     torch.save({"w": quant_result, "m": quant_meta}, buf)

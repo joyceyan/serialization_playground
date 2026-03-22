@@ -20,3 +20,4 @@ P3-15_no_dd	15359380	27006130	0.5687	0.0	reverted	remove DD flag in miniz (+73b 
 P3-16_fp32_shuffle	819512	27006130	N/A	0.0	reverted	fp32 byte-shuffle (BUGGY: misclassified dtypes)
 P3-17_fp16_first	15533859	27006130	0.5751	0.0	reverted	fp16→int8→fp32 order (+174KB worse)
 P3-18_pickle_compress	N/A	N/A	N/A	N/A	skipped	pickle already compressed by outer zstd
+P3-19_merge_storages	15361794	27006130	0.5688	0.0	reverted	merge same-dtype storages (+2.5KB despite -22KB raw)
