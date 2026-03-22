@@ -215,13 +215,15 @@ def encode_experiment(quant_result: dict[str, Tensor], quant_meta: dict[str, obj
         shuffled = b"".join(arr[i::4].tobytes() for i in range(4))
         streams["fp32"] = comp.compress(shuffled)
 
-    # Encode metadata as JSON + LZMA (smaller than pickle + zstd)
+    # Encode metadata as JSON + LZMA — indexed format for compactness
+    all_keys = _sorted_keys(quant_result)
     header = json.dumps({
-        "i": int8_keys,
-        "f": fp16_keys,
-        "g": fp32_keys,
-        "s": {k: list(quant_result[k].shape) for k in _sorted_keys(quant_result)},
-        "t": sorted(k for k in _sorted_keys(quant_result) if quant_result[k].ndim == 2),
+        "k": all_keys,
+        "i": [all_keys.index(k) for k in int8_keys],
+        "f": [all_keys.index(k) for k in fp16_keys],
+        "g": [all_keys.index(k) for k in fp32_keys],
+        "s": [list(quant_result[k].shape) for k in all_keys],
+        "t": [all_keys.index(k) for k in all_keys if quant_result[k].ndim == 2],
         "b": 1,
         "m": quant_meta,
     }, separators=(",", ":")).encode()
@@ -252,13 +254,15 @@ def decode_experiment(blob: bytes) -> tuple[dict[str, Tensor], dict[str, object]
 
     raw_header = read_block()
     header_json = json.loads(lzma.decompress(raw_header))
-    # Remap short keys to original names for compatibility
+    # Decode indexed format
+    all_keys = header_json["k"]
+    shapes_list = header_json["s"]
     header = {
-        "int8_keys": header_json["i"],
-        "fp16_keys": header_json["f"],
-        "fp32_keys": header_json["g"],
-        "shapes": header_json["s"],
-        "transposed": set(header_json["t"]),
+        "int8_keys": [all_keys[i] for i in header_json["i"]],
+        "fp16_keys": [all_keys[i] for i in header_json["f"]],
+        "fp32_keys": [all_keys[i] for i in header_json["g"]],
+        "shapes": {all_keys[i]: shapes_list[i] for i in range(len(all_keys))},
+        "transposed": set(all_keys[i] for i in header_json["t"]),
         "byte_shuffle": bool(header_json.get("b")),
         "meta": header_json["m"],
     }
