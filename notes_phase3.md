@@ -110,4 +110,10 @@ These strategies were proven effective in 55+ experiments on the same data. They
 
 **Result**: +272 bytes worse. The byteorder string creates useful zstd match contexts.
 
-**Current best: 15,366,650 (-146,381 = -0.94%)**. Remaining ideas: merge same-dtype storages, reduce pickle stream, strip ZIP data descriptors (C++ change).
+### Exp P3-9: Remove .format_version and .storage_alignment records — KEPT
+
+**Change**: Skip writing these metadata ZIP entries. Hardcode alignment=1 in load path.
+**Result**: 15,366,305 bytes (-345 from P3-6 = **-0.95% total**).
+**Insight**: Each ZIP entry adds ~100 bytes of headers. Removing 2 entries saves ~200 bytes of raw overhead + the records themselves.
+
+**Current best: 15,366,305 (-146,726 = -0.95%)**.
