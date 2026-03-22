@@ -35,3 +35,4 @@ exp29_reversed_zigzag	15330531	27006130	0.5678	0.0	kept	reversed zigzag (-188b n
 exp30_freq_permutation	15331147	27006130	0.5678	0.0	reverted	frequency permutation table (+616b, table overhead)
 exp31_strategy8	15333190	27006130	0.5679	0.0	reverted	zstd strategy=8 btultra (+2.7KB)
 exp31b_reverse_order	15439811	27006130	0.5718	0.0	reverted	reverse int8 order (+109KB)
+exp32_indexed_header	15330451	27006130	0.5677	0.0	kept	indexed header format (-80b new best!)
