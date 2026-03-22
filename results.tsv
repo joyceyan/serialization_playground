@@ -21,3 +21,5 @@ exp15_sub_filter	17002692	27006130	0.6296	0.0	reverted	PNG sub filter (-9.6% wor
 exp16_single_frame	15336164	27006130	0.5680	0.0	reverted	single zstd frame (+1.9KB vs multi-stream)
 exp17_json_lzma_header	15334024	27006130	0.5679	0.0	kept	JSON+LZMA header (-275 bytes)
 exp18_sign_magnitude	15597005	27006130	0.5776	0.0	reverted	sign-magnitude split (-0.5% worse)
+exp19_minmatch4	15349680	27006130	0.5685	0.0	reverted	zstd min_match=4 (+15KB worse)
+exp19b_lzma_fp32	15334024	27006130	0.5679	0.0	reverted	LZMA for fp32 (identical)
