@@ -65,4 +65,5 @@ exp52e_row_permute	N/A	N/A	N/A	N/A	skipped	pre-check: rows independent (6.16% ma
 exp53_flush_block	15327403	27006130	0.5676	0.0	kept	streaming zstd with per-tensor flush_block (-18b)
 exp54_order0_predict	16381632	26738688	N/A	0.0	reverted	order-0 byte prediction (+1.2MB worse)
 exp54b_cross_tensor_xor	16767299	26738688	N/A	0.0	reverted	XOR with prev same-size tensor (+1.6MB)
+exp55_arch_params	15327351	27006130	0.5676	0.0	kept	derive shapes from arch params (-52b)
 exp33_zstd_dict256	15329145	27006130	0.5677	0.0	kept	256-byte zstd dictionary (-1.3KB new best!)
