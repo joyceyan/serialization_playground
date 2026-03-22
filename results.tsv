@@ -44,4 +44,5 @@ exp37_raw_lzma2_header	15328157	27006130	0.5676	0.0	kept	raw LZMA2 for header (-
 exp38_lzma2_header_tuned	15328120	27006130	0.5676	0.0	kept	LZMA2 lc=0/lp=0/pb=0 for header (-37b)
 exp39_remove_t_field	15328070	27006130	0.5676	0.0	kept	derive transposed from shapes (-50b)
 exp40_derive_g_b	15328063	27006130	0.5676	0.0	kept	derive fp32_keys and byte_shuffle (-7b)
+exp41_compact_meta	15327864	27006130	0.5676	0.0	kept	compact type string meta (-199b!)
 exp33_zstd_dict256	15329145	27006130	0.5677	0.0	kept	256-byte zstd dictionary (-1.3KB new best!)
