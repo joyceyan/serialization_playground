@@ -238,7 +238,9 @@ def encode_experiment(quant_result: dict[str, Tensor], quant_meta: dict[str, obj
         "b": 1,
         "m": quant_meta,
     }, separators=(",", ":")).encode()
-    header_c = lzma.compress(header, preset=9 | lzma.PRESET_EXTREME)
+    # Raw LZMA2 for header too (saves ~32 bytes of .xz container overhead)
+    header_filters = [{"id": lzma.FILTER_LZMA2, "preset": 9 | lzma.PRESET_EXTREME}]
+    header_c = lzma.compress(header, format=lzma.FORMAT_RAW, filters=header_filters)
 
     # Pack: [header_len(4)] [header_compressed] [int8_len(4)] [int8_compressed] [fp16_len(4)] [fp16_compressed] [fp32_len(4)?] [fp32_compressed?]
     out = struct.pack("<I", len(header_c)) + header_c
@@ -268,7 +270,8 @@ def decode_experiment(blob: bytes) -> tuple[dict[str, Tensor], dict[str, object]
         return data
 
     raw_header = read_block()
-    header_json = json.loads(lzma.decompress(raw_header))
+    header_filters = [{"id": lzma.FILTER_LZMA2, "preset": 9 | lzma.PRESET_EXTREME}]
+    header_json = json.loads(lzma.decompress(raw_header, format=lzma.FORMAT_RAW, filters=header_filters))
     # Decode indexed format
     all_keys = header_json["k"]
     shapes_list = header_json["s"]
