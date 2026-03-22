@@ -174,13 +174,16 @@ def encode_experiment(quant_result: dict[str, Tensor], quant_meta: dict[str, obj
 
     # Build raw byte streams — transpose 2D tensors
     streams = {}
-    # int8 stream: just concatenate
+    # int8 stream: zigzag encode (maps 0,-1,1,-2,2,... to 0,1,2,3,4,...)
     int8_parts = []
     for k in int8_keys:
         t = quant_result[k]
         if t.ndim == 2:
             t = t.t().contiguous()
-        int8_parts.append(t.numpy().tobytes())
+        arr = t.numpy().astype(np.int16)
+        # Zigzag encoding: (v << 1) ^ (v >> 15)
+        zigzag = ((arr << 1) ^ (arr >> 15)).astype(np.uint8)
+        int8_parts.append(zigzag.tobytes())
     if int8_parts:
         streams["int8"] = comp.compress(b"".join(int8_parts))
 
@@ -258,7 +261,15 @@ def decode_experiment(blob: bytes) -> tuple[dict[str, Tensor], dict[str, object]
         "byte_shuffle": bool(header_json.get("b")),
         "meta": header_json["m"],
     }
-    int8_raw = decomp.decompress(read_block()) if header["int8_keys"] else b""
+    int8_raw_zigzag = decomp.decompress(read_block()) if header["int8_keys"] else b""
+    # Reverse zigzag encoding
+    if int8_raw_zigzag:
+        arr = np.frombuffer(int8_raw_zigzag, dtype=np.uint8).astype(np.int16)
+        # Zigzag decode: (v >>> 1) ^ -(v & 1)
+        decoded = ((arr >> 1) ^ -(arr & 1)).astype(np.int8)
+        int8_raw = decoded.tobytes()
+    else:
+        int8_raw = b""
     fp16_block = read_block()
     fp16_raw_shuffled = lzma.decompress(fp16_block) if header["fp16_keys"] else b""
     fp32_raw_shuffled = decomp.decompress(read_block()) if header["fp32_keys"] else b""
