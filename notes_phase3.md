@@ -150,3 +150,25 @@ These strategies were proven effective in 55+ experiments on the same data. They
 **Result**: +73b worse. The DD flag (bit 3 in ZIP headers) was already being set but data descriptors weren't actually written (uncomp_size=0 skips them). The 187 occurrences of 0x08074b50 in the file were false positives (tensor data). Changing the flag just changed the ZIP header bytes, hurting compression.
 
 **Current best: 15,359,307 (-153,724 = -0.99%)**.
+
+## Summary at P3-15
+
+**All changes applied (in order of impact):**
+1. **P3-1**: Dtype reorder in `_save()` — -128,079 bytes (Python)
+2. **P3-6**: Byte-shuffle fp16 storages — -13,628 bytes (Python)
+3. **P3-12**: Disable CRC32 — -6,312 bytes (Python wrapper)
+4. **P3-3**: Zigzag int8 storages — -4,496 bytes (Python)
+5. **P3-13b**: Remove FBXX padding — -605 bytes (C++)
+6. **P3-9**: Remove .format_version/.storage_alignment — -345 bytes (Python)
+7. **P3-5**: Storage alignment=1 — -178 bytes (Python)
+8. **P3-13**: Skip serialization_id — -78 bytes (C++)
+9. **P3-11**: Outer zstd write_content_size=False — -3 bytes (Python wrapper)
+
+**Reverted experiments:**
+- P3-2: Size sort within dtype (+194KB)
+- P3-4: Transpose 2D tensors (+73KB — doesn't work with per-tensor ZIP)
+- P3-7: Pickle protocol 5 (+9KB)
+- P3-8: No byteorder record (+272b)
+- P3-10: zstd dictionary for outer compression (+4.6KB)
+- P3-14: Short archive name (+966b)
+- P3-15: Remove DD flag in miniz (+73b)
