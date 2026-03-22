@@ -172,3 +172,12 @@ These strategies were proven effective in 55+ experiments on the same data. They
 - P3-10: zstd dictionary for outer compression (+4.6KB)
 - P3-14: Short archive name (+966b)
 - P3-15: Remove DD flag in miniz (+73b)
+
+### Exp P3-20: Streaming zstd with flush_block at ZIP entry boundaries — KEPT
+
+**Hypothesis**: Instead of compressing the entire torch.save output as one zstd frame, use streaming compression with flush_block at each ZIP local file header boundary. This lets zstd build per-entry FSE (frequency) tables while maintaining the LZ77 window across entries.
+**Change**: Parse ZIP local file headers from the raw output, use `compressobj()` with `COMPRESSOBJ_FLUSH_BLOCK` between entries.
+**Result**: 15,346,648 bytes (-12,659 from P3-13b = **-1.07% total**). Major breakthrough!
+**Insight**: The ZIP format interleaves headers (structured, repetitive) with storage data (random-ish). Default zstd uses one set of FSE tables for the whole file. Flushing at entry boundaries lets zstd reset its entropy tables at natural data transitions, building better frequency models for each segment. This is especially valuable at the dtype transition (int8 → fp16) where the byte distribution changes dramatically.
+
+**Current best: 15,346,648 (-166,383 = -1.07%)**.

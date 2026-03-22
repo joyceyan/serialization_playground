@@ -167,7 +167,38 @@ def encode_fork_baseline(quant_result: dict[str, Tensor], quant_meta: dict[str, 
     torch.save({"w": quant_result, "m": quant_meta}, buf)
     torch.serialization.set_crc32_options(True)
     raw = buf.getvalue()
-    return zstandard.ZstdCompressor(level=22, write_content_size=False).compress(raw)
+
+    # Split the raw output into segments at ZIP entry boundaries,
+    # identify the int8 vs non-int8 regions, compress each optimally.
+    # Find ZIP local file headers to locate segment boundaries
+    import struct as _struct
+    segments = []  # (offset, size, is_storage, dtype_hint)
+    pos = 0
+    while pos < len(raw) - 4:
+        sig = _struct.unpack_from('<I', raw, pos)[0]
+        if sig == 0x04034b50:  # local file header
+            fname_len = _struct.unpack_from('<H', raw, pos + 26)[0]
+            extra_len = _struct.unpack_from('<H', raw, pos + 28)[0]
+            fname = raw[pos+30:pos+30+fname_len].decode('utf-8', errors='replace')
+            header_size = 30 + fname_len + extra_len
+            segments.append((pos, fname))
+            pos += header_size
+            # Skip past the data (find next header or central directory)
+            continue
+        pos += 1
+
+    # Just use zstd-22 with streaming flush_block at each ZIP entry boundary
+    comp = zstandard.ZstdCompressor(level=22, write_content_size=False)
+    cctx = comp.compressobj()
+    parts = []
+    prev = 0
+    for offset, fname in segments[1:]:  # skip first, flush between entries
+        parts.append(cctx.compress(raw[prev:offset]))
+        parts.append(cctx.flush(zstandard.COMPRESSOBJ_FLUSH_BLOCK))
+        prev = offset
+    parts.append(cctx.compress(raw[prev:]))
+    parts.append(cctx.flush(zstandard.COMPRESSOBJ_FLUSH_FINISH))
+    return b"".join(parts)
 
 
 def decode_fork_baseline(blob: bytes) -> tuple[dict[str, Tensor], dict[str, object]]:
