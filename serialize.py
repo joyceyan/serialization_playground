@@ -238,11 +238,15 @@ def encode_experiment(quant_result: dict[str, Tensor], quant_meta: dict[str, obj
     }, separators=(",", ":")).encode()
     header_c = lzma.compress(header, preset=9 | lzma.PRESET_EXTREME)
 
-    # Pack: [header_len(4)] [header_compressed] [int8_len(4)] [int8_compressed] [fp16_len(4)] [fp16_compressed] [fp32_compressed]
+    # Pack: [header_len(4)] [header_compressed] [int8_len(4)] [int8_compressed] [fp16_len(4)] [fp16_compressed] [fp32_len(4)?] [fp32_compressed?]
     out = struct.pack("<I", len(header_c)) + header_c
-    for label in ["int8", "fp16", "fp32"]:
+    for label in ["int8", "fp16"]:
         blob = streams.get(label, b"")
         out += struct.pack("<I", len(blob)) + blob
+    # Only include fp32 block if non-empty
+    fp32_blob = streams.get("fp32", b"")
+    if fp32_blob:
+        out += struct.pack("<I", len(fp32_blob)) + fp32_blob
     return out
 
 
@@ -295,7 +299,11 @@ def decode_experiment(blob: bytes) -> tuple[dict[str, Tensor], dict[str, object]
         int8_raw = b""
     fp16_block = read_block()
     fp16_raw_shuffled = lzma.decompress(fp16_block) if header["fp16_keys"] else b""
-    fp32_raw_shuffled = decomp.decompress(read_block()) if header["fp32_keys"] else b""
+    # fp32 block is optional (omitted when empty)
+    if header["fp32_keys"] and off < len(blob):
+        fp32_raw_shuffled = decomp.decompress(read_block())
+    else:
+        fp32_raw_shuffled = b""
 
     # Unshuffle fp16: high bytes then low bytes → interleave
     if fp16_raw_shuffled and header.get("byte_shuffle"):
