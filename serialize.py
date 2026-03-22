@@ -232,9 +232,7 @@ def encode_experiment(quant_result: dict[str, Tensor], quant_meta: dict[str, obj
         "k": all_keys,
         "i": [all_keys.index(k) for k in int8_keys],
         "f": [all_keys.index(k) for k in fp16_keys],
-        "g": [all_keys.index(k) for k in fp32_keys],
         "s": [list(quant_result[k].shape) for k in all_keys],
-        "b": 1,
         "m": quant_meta,
     }, separators=(",", ":")).encode()
     # Raw LZMA2 for header too (saves ~32 bytes of .xz container overhead)
@@ -274,13 +272,16 @@ def decode_experiment(blob: bytes) -> tuple[dict[str, Tensor], dict[str, object]
     # Decode indexed format
     all_keys = header_json["k"]
     shapes_list = header_json["s"]
+    int8_set = set(header_json["i"])
+    fp16_set = set(header_json["f"])
+    fp32_indices = [i for i in range(len(all_keys)) if i not in int8_set and i not in fp16_set]
     header = {
         "int8_keys": [all_keys[i] for i in header_json["i"]],
         "fp16_keys": [all_keys[i] for i in header_json["f"]],
-        "fp32_keys": [all_keys[i] for i in header_json["g"]],
+        "fp32_keys": [all_keys[i] for i in fp32_indices],
         "shapes": {all_keys[i]: shapes_list[i] for i in range(len(all_keys))},
         "transposed": set(all_keys[i] for i in range(len(all_keys)) if len(shapes_list[i]) == 2),
-        "byte_shuffle": bool(header_json.get("b")),
+        "byte_shuffle": True,
         "meta": header_json["m"],
     }
     int8_block = read_block()
