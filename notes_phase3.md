@@ -68,3 +68,9 @@ These strategies were proven effective in 55+ experiments on the same data. They
 **Change**: Added dtype-based sorting of `serialized_storages` keys before the write loop in `torch_fork_repo/torch/serialization.py:1253`.
 **Result**: 15,384,952 bytes (-128,079 = **-0.83%** vs 15,513,031 baseline). Major win!
 **Insight**: This is the torch.save equivalent of Phase 2's "separate streams by dtype" (-1.05%). The pickle+ZIP format adds overhead that limits the benefit compared to Phase 2's custom format, but grouping by dtype is still very effective even within the standard format.
+
+### Exp P3-2: Sort by size within dtype — REVERTED
+
+**Hypothesis**: Putting largest tensors first within each dtype group would help zstd build better context.
+**Result**: 15,579,437 bytes (+194,485 vs P3-1, worse than original baseline!). Sorting by size completely breaks the natural tensor ordering that zstd exploits. The original insertion order preserves layer-by-layer locality which is critical.
+**Insight**: Within each dtype group, the natural pickle traversal order (which follows dict insertion order = layer-by-layer) is optimal. Only the inter-dtype ordering should be changed.
