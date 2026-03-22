@@ -120,4 +120,15 @@ These strategies were proven effective in 55+ experiments on the same data. They
 
 **Result**: +4,587 bytes. Dictionary can't effectively model mixed content (pickle + ZIP headers + storage data).
 
-**Current best: 15,366,305 (-146,726 = -0.95%)**.
+### Exp P3-10: zstd dictionary for outer compression — REVERTED
+**Result**: +4,587 bytes. Mixed content defeats dictionary.
+
+### Exp P3-11: Outer zstd write_content_size=False — KEPT
+**Result**: -3 bytes. Tiny but free.
+
+### Exp P3-12: Disable CRC32 in ZIP writer — KEPT
+**Change**: `set_crc32_options(False)` before `torch.save`. Eliminates per-entry CRC32 fields.
+**Result**: 15,359,990 bytes (-6,312 from P3-11 = **-0.99% total**).
+**Insight**: 190 ZIP entries × ~33 bytes of CRC32-related overhead ≈ 6.3KB. Since we compress with zstd-22 which has its own integrity, ZIP CRC32 is pure waste.
+
+**Current best: 15,359,990 (-153,041 = -0.99%)**.

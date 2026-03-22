@@ -12,3 +12,4 @@ P3-8_no_byteorder	15366922	27006130	0.5690	0.0	reverted	skip byteorder record (+
 P3-9_strip_meta	15366305	27006130	0.5690	0.0	kept	remove .format_version and .storage_alignment (-345b)
 P3-10_zstd_dict	15370892	27006130	0.5692	0.0	reverted	zstd dictionary for outer compression (+4.6KB)
 P3-11_no_content_size	15366302	27006130	0.5690	0.0	kept	outer zstd write_content_size=False (-3b)
+P3-12_no_crc32	15359990	27006130	0.5687	0.0	kept	disable CRC32 in ZIP (-6.3KB!)
