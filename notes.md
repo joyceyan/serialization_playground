@@ -198,8 +198,17 @@ Phase 1 optimized against an MLX smoke-test artifact with 72.5% zero values and 
 **Why further improvement is extremely hard:**
 The int8 stream (26.7MB, 99% of output) is already compressed below its per-symbol entropy bound (4.67 bits → 15.6MB theoretical, actual ~15.1MB). This means zstd is effectively using positional correlations to compress better than any symbol-level approach. Any transformation that disrupts byte positions makes it worse.
 
-**Remaining ideas (increasingly speculative):**
-- Investigate if there's a better tensor ordering than alphabetical
-- Try compressing the same data at different zstd levels (1-22) and pick the min per-tensor
-- Custom ANS encoder tuned to the known value distribution
-- Explore non-standard compression libraries (zpaq, cmix — likely not available)
+### Exp 21-23: Various approaches — ALL REVERTED
+Size ordering +22KB worse, multithreading identical, XOR had decoder bug.
+
+### Exp 24: Zigzag encoding for int8 values — KEPT
+**Hypothesis**: Zigzag encoding maps 0,-1,1,-2,2,... to 0,1,2,3,4,... concentrating common values near byte 0. This makes the low byte values very dense.
+**Result**: 15,330,719 bytes (-3,305 from exp17, -182,312 = -1.175% vs baseline). New best!
+**Insight**: Phase 1 notes said "Zigzag encoding (LZMA handles signed int8 well)" — but this was wrong for zstd! Zigzag helps zstd specifically because it clusters frequent values into contiguous byte ranges, improving both frequency table efficiency and LZ77 match probability.
+
+**Current best: 15,330,719 (-1.175%)**
+
+**Remaining ideas:**
+- Try zigzag + unsigned offset to shift range further
+- Try different value remapping strategies (frequency-based permutation table)
+- More header size optimizations
