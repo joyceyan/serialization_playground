@@ -36,4 +36,6 @@ exp30_freq_permutation	15331147	27006130	0.5678	0.0	reverted	frequency permutati
 exp31_strategy8	15333190	27006130	0.5679	0.0	reverted	zstd strategy=8 btultra (+2.7KB)
 exp31b_reverse_order	15439811	27006130	0.5718	0.0	reverted	reverse int8 order (+109KB)
 exp32_indexed_header	15330451	27006130	0.5677	0.0	kept	indexed header format (-80b new best!)
+exp33_zstd_dict256	15329145	27006130	0.5677	0.0	kept	256-byte zstd dictionary (-1.3KB!)
+exp34_merge_fp_streams	15329153	27006130	0.5677	0.0	reverted	merge fp16+fp32 LZMA (+8b worse)
 exp33_zstd_dict256	15329145	27006130	0.5677	0.0	kept	256-byte zstd dictionary (-1.3KB new best!)
