@@ -164,14 +164,15 @@ def encode_fork_baseline(quant_result: dict[str, Tensor], quant_meta: dict[str, 
     buf = io.BytesIO()
     torch.save({"w": quant_result, "m": quant_meta}, buf)
     raw = buf.getvalue()
-    return zstandard.ZstdCompressor(level=22).compress(raw)
+    return zstandard.ZstdCompressor(level=22, write_content_size=False).compress(raw)
 
 
 def decode_fork_baseline(blob: bytes) -> tuple[dict[str, Tensor], dict[str, object]]:
     """Decode using the active torch."""
     if not HAS_ZSTD:
         raise ImportError("zstandard not installed")
-    raw = zstandard.ZstdDecompressor().decompress(blob)
+    # Estimate max output: raw torch.save is ~27MB for this model
+    raw = zstandard.ZstdDecompressor().decompress(blob, max_output_size=50_000_000)
     obj = torch.load(io.BytesIO(raw), map_location="cpu", weights_only=False)
     return obj["w"], obj["m"]
 
