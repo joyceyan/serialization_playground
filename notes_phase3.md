@@ -143,4 +143,10 @@ These strategies were proven effective in 55+ experiments on the same data. They
 ### Exp P3-14: Short archive name "a" — REVERTED
 **Result**: +966 bytes worse. The long "archive/" prefix is highly compressible (187 identical repetitions). Shorter prefix reduces repetition, hurting zstd.
 
+### Exp P3-14: Short archive name — REVERTED
+**Result**: +966b worse. Long "archive/" prefix is highly compressible (187 repetitions).
+
+### Exp P3-15: Remove DD flag in miniz — REVERTED
+**Result**: +73b worse. The DD flag (bit 3 in ZIP headers) was already being set but data descriptors weren't actually written (uncomp_size=0 skips them). The 187 occurrences of 0x08074b50 in the file were false positives (tensor data). Changing the flag just changed the ZIP header bytes, hurting compression.
+
 **Current best: 15,359,307 (-153,724 = -0.99%)**.
