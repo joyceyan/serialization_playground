@@ -10,3 +10,4 @@ P3-6_byte_shuffle_fp16	15366650	27006130	0.5690	0.0	kept	byte-shuffle fp16 stora
 P3-7_pickle5	15375674	27006130	0.5693	0.0	reverted	pickle protocol 5 (+9KB worse)
 P3-8_no_byteorder	15366922	27006130	0.5690	0.0	reverted	skip byteorder record (+272b worse)
 P3-9_strip_meta	15366305	27006130	0.5690	0.0	kept	remove .format_version and .storage_alignment (-345b)
+P3-10_zstd_dict	15370892	27006130	0.5692	0.0	reverted	zstd dictionary for outer compression (+4.6KB)

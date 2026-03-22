@@ -116,4 +116,8 @@ These strategies were proven effective in 55+ experiments on the same data. They
 **Result**: 15,366,305 bytes (-345 from P3-6 = **-0.95% total**).
 **Insight**: Each ZIP entry adds ~100 bytes of headers. Removing 2 entries saves ~200 bytes of raw overhead + the records themselves.
 
+### Exp P3-10: zstd dictionary for outer compression — REVERTED
+
+**Result**: +4,587 bytes. Dictionary can't effectively model mixed content (pickle + ZIP headers + storage data).
+
 **Current best: 15,366,305 (-146,726 = -0.95%)**.
