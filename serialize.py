@@ -168,9 +168,7 @@ def encode_fork_baseline(quant_result: dict[str, Tensor], quant_meta: dict[str, 
     torch.serialization.set_crc32_options(True)
     raw = buf.getvalue()
 
-    # Split the raw output into segments at ZIP entry boundaries,
-    # identify the int8 vs non-int8 regions, compress each optimally.
-    # Find ZIP local file headers to locate segment boundaries
+    # Split the raw output into segments at ZIP entry boundaries
     import struct as _struct
     segments = []  # (offset, size, is_storage, dtype_hint)
     pos = 0
