@@ -172,53 +172,136 @@ def encode_experiment(quant_result: dict[str, Tensor], quant_meta: dict[str, obj
         else:
             fp32_keys.append(k)
 
-    # Build raw byte streams — transpose 2D tensors
+    # Build raw byte streams
     streams = {}
-    # int8 stream: per-tensor ANS with zigzag + tight alphabet
     import constriction
-    int8_ans_parts = []  # (compressed_uint32_array, freq_table_bytes, max_sym, numel)
-    for k in int8_keys:
-        t = quant_result[k].contiguous()
-        arr = t.numpy().astype(np.int16).flatten()
-        zigzag = ((arr << 1) ^ (arr >> 15)).astype(np.int32)
+    from scipy.cluster.vq import kmeans2
 
-        # Determine alphabet size from quant type
+    # Separate int6 and int8 tensors
+    int6_keys = []
+    int8_only_keys = []
+    for k in int8_keys:
         base = k[:-2] if k.endswith(".q") else k
         info = quant_meta.get(base)
-        max_sym = 64 if (isinstance(info, dict) and info.get("type") == "int6") else 256
+        if isinstance(info, dict) and info.get("type") == "int6":
+            int6_keys.append(k)
+        else:
+            int8_only_keys.append(k)
 
-        # Build per-tensor frequency table (uint16 for compact storage)
-        freqs = np.bincount(zigzag, minlength=max_sym).astype(np.float64)[:max_sym]
+    # === INT6: K-means clustered row models ===
+    N_CLUSTERS = 16
+    int6_row_data = []      # zigzag int32 arrays per row
+    int6_row_dists = []     # per-row probability distributions
+    int6_row_tensor_idx = [] # which tensor each row belongs to
+    int6_tensor_nrows = []  # rows per tensor
+
+    for ti, k in enumerate(int6_keys):
+        t = quant_result[k].contiguous().numpy()
+        if t.ndim != 2:
+            # 1D tensor — treat as single row
+            arr = t.astype(np.int16).flatten()
+            zigzag = ((arr << 1) ^ (arr >> 15)).astype(np.int32)
+            freqs = np.bincount(zigzag, minlength=64)[:64].astype(np.float64)
+            freqs = np.maximum(freqs, 1)
+            int6_row_data.append(zigzag)
+            int6_row_dists.append(freqs / freqs.sum())
+            int6_row_tensor_idx.append(ti)
+            int6_tensor_nrows.append(1)
+            continue
+        nrows = t.shape[0]
+        int6_tensor_nrows.append(nrows)
+        for i in range(nrows):
+            row = t[i].astype(np.int16)
+            zigzag = ((row << 1) ^ (row >> 15)).astype(np.int32)
+            freqs = np.bincount(zigzag, minlength=64)[:64].astype(np.float64)
+            freqs = np.maximum(freqs, 1)
+            int6_row_data.append(zigzag)
+            int6_row_dists.append(freqs / freqs.sum())
+            int6_row_tensor_idx.append(ti)
+
+    # K-means clustering
+    dist_matrix = np.array(int6_row_dists)
+    centroids, labels = kmeans2(dist_matrix, N_CLUSTERS, minit="points", iter=20)
+
+    # Build per-cluster frequency tables and encode
+    cluster_compressed = []  # (cluster_id, compressed_bytes)
+    cluster_freq_u16 = []
+    for c in range(N_CLUSTERS):
+        mask = labels == c
+        if not mask.any():
+            cluster_freq_u16.append(np.ones(64, dtype=np.uint16))
+            cluster_compressed.append(b"")
+            continue
+        cluster_data = np.concatenate([int6_row_data[i] for i in range(len(labels)) if labels[i] == c])
+        freqs = np.bincount(cluster_data, minlength=64)[:64].astype(np.float64)
         freqs = np.maximum(freqs, 1)
         freq_u16 = np.round(freqs / freqs.sum() * 65535).astype(np.uint16)
         freq_u16 = np.maximum(freq_u16, 1)
         probs = freq_u16.astype(np.float64) / freq_u16.astype(np.float64).sum()
+        cluster_freq_u16.append(freq_u16)
 
-        # ANS encode
+        model = constriction.stream.model.Categorical(probs, perfect=False)
+        encoder = constriction.stream.stack.AnsCoder()
+        encoder.encode_reverse(cluster_data, model)
+        cluster_compressed.append(encoder.get_compressed().tobytes())
+
+    # Compress labels (4-bit packed + LZMA)
+    packed_labels = np.zeros((len(labels) + 1) // 2, dtype=np.uint8)
+    for i in range(0, len(labels) - 1, 2):
+        packed_labels[i // 2] = (labels[i] << 4) | labels[i + 1]
+    if len(labels) % 2:
+        packed_labels[-1] = labels[-1] << 4
+    freq_filters = [{"id": lzma.FILTER_LZMA2, "preset": 9 | lzma.PRESET_EXTREME, "lc": 0, "lp": 0, "pb": 0}]
+    labels_compressed = lzma.compress(packed_labels.tobytes(), format=lzma.FORMAT_RAW, filters=freq_filters)
+
+    # Compress frequency tables
+    all_freq_bytes = b"".join(f.tobytes() for f in cluster_freq_u16)
+    freq_compressed = lzma.compress(all_freq_bytes, format=lzma.FORMAT_RAW, filters=freq_filters)
+
+    # === INT8 (non-int6): per-tensor ANS ===
+    int8_parts = []
+    for k in int8_only_keys:
+        t = quant_result[k].contiguous()
+        arr = t.numpy().astype(np.int16).flatten()
+        zigzag = ((arr << 1) ^ (arr >> 15)).astype(np.int32)
+        freqs = np.bincount(zigzag, minlength=256)[:256].astype(np.float64)
+        freqs = np.maximum(freqs, 1)
+        freq_u16 = np.round(freqs / freqs.sum() * 65535).astype(np.uint16)
+        freq_u16 = np.maximum(freq_u16, 1)
+        probs = freq_u16.astype(np.float64) / freq_u16.astype(np.float64).sum()
         model = constriction.stream.model.Categorical(probs, perfect=False)
         encoder = constriction.stream.stack.AnsCoder()
         encoder.encode_reverse(zigzag, model)
-        compressed = encoder.get_compressed()
+        int8_parts.append((encoder.get_compressed().tobytes(), freq_u16, len(zigzag)))
 
-        int8_ans_parts.append((compressed, freq_u16, max_sym, len(zigzag)))
-
-    if int8_ans_parts:
-        # Pack freq tables together and LZMA-compress them
-        all_freq_bytes = b""
-        tensor_meta = []  # (max_sym, numel, c_data_bytes)
-        for compressed, freq_u16, max_sym, numel in int8_ans_parts:
-            all_freq_bytes += freq_u16.tobytes()
-            tensor_meta.append((max_sym, numel, compressed.tobytes()))
-        freq_filters = [{"id": lzma.FILTER_LZMA2, "preset": 9 | lzma.PRESET_EXTREME, "lc": 0, "lp": 0, "pb": 0}]
-        freq_compressed = lzma.compress(all_freq_bytes, format=lzma.FORMAT_RAW, filters=freq_filters)
-
-        # Pack: [num_tensors(2)] [freq_block_len(2)] [freq_block] per-tensor: [max_sym(2)] [numel(4)] [c_len(4)] [c_data]
-        ans_out = struct.pack("<HH", len(int8_ans_parts), len(freq_compressed))
-        ans_out += freq_compressed
-        for max_sym, numel, c_data in tensor_meta:
-            ans_out += struct.pack("<HII", max_sym, numel, len(c_data))
-            ans_out += c_data
-        streams["int8"] = ans_out
+    # Pack everything into int8 stream
+    # Format: [version(1)] [n_clusters(1)] [n_int6_tensors(2)] [n_int8_tensors(2)]
+    #         [n_rows(4)] [freq_tables_len(2)] [freq_tables_lzma]
+    #         [labels_len(2)] [labels_lzma]
+    #         per-cluster: [c_len(4)] [c_data]
+    #         [int6_tensor_nrows as packed bytes]
+    #         per-int8-tensor: [numel(4)] [freq_table(512)] [c_len(4)] [c_data]
+    ans_out = struct.pack("<BBHHI",
+        1,  # version
+        N_CLUSTERS,
+        len(int6_keys),
+        len(int8_only_keys),
+        len(labels),
+    )
+    ans_out += struct.pack("<H", len(freq_compressed)) + freq_compressed
+    ans_out += struct.pack("<H", len(labels_compressed)) + labels_compressed
+    for c_data in cluster_compressed:
+        ans_out += struct.pack("<I", len(c_data)) + c_data
+    # Tensor row counts (to reconstruct row-to-tensor mapping)
+    for nr in int6_tensor_nrows:
+        ans_out += struct.pack("<H", nr)
+    # Int8 tensors
+    int8_freq_bytes = b"".join(f.tobytes() for _, f, _ in int8_parts)
+    int8_freq_c = lzma.compress(int8_freq_bytes, format=lzma.FORMAT_RAW, filters=freq_filters) if int8_parts else b""
+    ans_out += struct.pack("<H", len(int8_freq_c)) + int8_freq_c
+    for c_data_bytes, _, numel in int8_parts:
+        ans_out += struct.pack("<II", numel, len(c_data_bytes)) + c_data_bytes
+    streams["int8"] = ans_out
 
     # fp16 stream: byte-shuffle (separate high and low bytes)
     fp16_parts = []
@@ -394,41 +477,151 @@ def decode_experiment(blob: bytes) -> tuple[dict[str, Tensor], dict[str, object]
         "byte_shuffle": True,
         "meta": quant_meta,
     }
-    # Decode per-tensor ANS int8 stream
+    # Decode clustered ANS int8 stream
     import constriction
     int8_block = read_block()
     if header["int8_keys"] and int8_block:
         boff = 0
-        num_tensors, freq_block_len = struct.unpack_from("<HH", int8_block, boff)
-        boff += 4
-        # Decompress frequency tables
+        version, n_clusters, n_int6, n_int8, n_rows = struct.unpack_from("<BBHHI", int8_block, boff)
+        boff += 10
         freq_filters = [{"id": lzma.FILTER_LZMA2, "preset": 9 | lzma.PRESET_EXTREME, "lc": 0, "lp": 0, "pb": 0}]
-        all_freq_bytes = lzma.decompress(int8_block[boff:boff + freq_block_len], format=lzma.FORMAT_RAW, filters=freq_filters)
-        boff += freq_block_len
-        freq_off = 0
 
-        int8_decoded_parts = []
-        for _ in range(num_tensors):
-            max_sym, numel, c_len = struct.unpack_from("<HII", int8_block, boff)
-            boff += 10
-            c_data = int8_block[boff:boff + c_len]
-            boff += c_len
+        # Frequency tables
+        freq_c_len = struct.unpack_from("<H", int8_block, boff)[0]; boff += 2
+        all_freq_bytes = lzma.decompress(int8_block[boff:boff + freq_c_len], format=lzma.FORMAT_RAW, filters=freq_filters)
+        boff += freq_c_len
 
-            # Get freq table from decompressed block
-            freq_u16 = np.frombuffer(all_freq_bytes[freq_off:freq_off + max_sym * 2], dtype=np.uint16).astype(np.float64)
-            freq_off += max_sym * 2
+        # Labels
+        labels_c_len = struct.unpack_from("<H", int8_block, boff)[0]; boff += 2
+        labels_packed = lzma.decompress(int8_block[boff:boff + labels_c_len], format=lzma.FORMAT_RAW, filters=freq_filters)
+        boff += labels_c_len
+        # Unpack 4-bit labels
+        labels_arr = np.frombuffer(labels_packed, dtype=np.uint8)
+        labels = np.empty(n_rows, dtype=np.int32)
+        for i in range(0, n_rows - 1, 2):
+            labels[i] = labels_arr[i // 2] >> 4
+            labels[i + 1] = labels_arr[i // 2] & 0x0F
+        if n_rows % 2:
+            labels[n_rows - 1] = labels_arr[n_rows // 2] >> 4
+
+        # Parse cluster frequency tables
+        cluster_probs = []
+        for c in range(n_clusters):
+            freq_u16 = np.frombuffer(all_freq_bytes[c * 128:(c + 1) * 128], dtype=np.uint16).astype(np.float64)
             probs = freq_u16 / freq_u16.sum()
+            cluster_probs.append(probs)
 
-            # ANS decode
-            compressed = np.frombuffer(c_data, dtype=np.uint32)
+        # Decode per-cluster ANS data
+        cluster_data = {}
+        for c in range(n_clusters):
+            c_len = struct.unpack_from("<I", int8_block, boff)[0]; boff += 4
+            if c_len == 0:
+                cluster_data[c] = np.array([], dtype=np.int32)
+                continue
+            c_bytes = int8_block[boff:boff + c_len]; boff += c_len
+            compressed = np.frombuffer(c_bytes, dtype=np.uint32)
+            decoder = constriction.stream.stack.AnsCoder(compressed)
+            model = constriction.stream.model.Categorical(cluster_probs[c], perfect=False)
+            n_in_cluster = int(np.sum(labels == c))
+            # Need total values in cluster — sum of row lengths
+            # For now, decode all and split later
+            # Actually we need the total number of values per cluster
+            pass  # will compute below
+
+        # Tensor row counts
+        tensor_nrows = []
+        for _ in range(n_int6):
+            nr = struct.unpack_from("<H", int8_block, boff)[0]; boff += 2
+            tensor_nrows.append(nr)
+
+        # Compute per-row ncols from tensor shapes
+        int6_keys_sorted = [k for k in sorted(quant_meta.keys())
+                           if isinstance(quant_meta.get(k), dict) and quant_meta[k].get("type") == "int6"]
+        # Map to actual tensor keys (.q suffix)
+        int6_q_keys = [k for k in header["int8_keys"]
+                       if any(k.startswith(mk) for mk in int6_keys_sorted)
+                       and isinstance(quant_meta.get(k[:-2] if k.endswith(".q") else k), dict)
+                       and quant_meta.get(k[:-2] if k.endswith(".q") else k, {}).get("type") == "int6"]
+
+        row_ncols = []
+        for ti, nr in enumerate(tensor_nrows):
+            shape = header["shapes"][int6_q_keys[ti]]
+            ncols = shape[-1] if len(shape) >= 2 else int(np.prod(shape))
+            for _ in range(nr):
+                row_ncols.append(ncols)
+
+        # Now decode each cluster with the correct total symbol count
+        cluster_decoded = {}
+        # Re-read cluster data
+        boff_clusters = 10 + 2 + freq_c_len + 2 + labels_c_len  # back to cluster data
+        for c in range(n_clusters):
+            c_len = struct.unpack_from("<I", int8_block, boff_clusters)[0]; boff_clusters += 4
+            if c_len == 0:
+                cluster_decoded[c] = np.array([], dtype=np.int32)
+                continue
+            c_bytes = int8_block[boff_clusters:boff_clusters + c_len]; boff_clusters += c_len
+            compressed = np.frombuffer(c_bytes, dtype=np.uint32)
+            decoder = constriction.stream.stack.AnsCoder(compressed)
+            model = constriction.stream.model.Categorical(cluster_probs[c], perfect=False)
+            total_syms = sum(row_ncols[i] for i in range(n_rows) if labels[i] == c)
+            zigzag = decoder.decode(model, total_syms)
+            cluster_decoded[c] = zigzag
+
+        # Reconstruct rows in order
+        cluster_offsets = {c: 0 for c in range(n_clusters)}
+        int6_decoded = []
+        for row_idx in range(n_rows):
+            c = int(labels[row_idx])
+            ncols = row_ncols[row_idx]
+            off_c = cluster_offsets[c]
+            row_zigzag = cluster_decoded[c][off_c:off_c + ncols]
+            cluster_offsets[c] += ncols
+            decoded = ((row_zigzag.astype(np.int16) >> 1) ^ -(row_zigzag.astype(np.int16) & 1)).astype(np.int8)
+            int6_decoded.append(decoded.tobytes())
+
+        # Group decoded rows back into tensors
+        int6_tensor_bytes = []
+        row_cursor = 0
+        for nr in tensor_nrows:
+            tensor_rows = b"".join(int6_decoded[row_cursor:row_cursor + nr])
+            int6_tensor_bytes.append(tensor_rows)
+            row_cursor += nr
+
+        # Decode int8 (non-int6) tensors
+        int8_freq_c_len = struct.unpack_from("<H", int8_block, boff)[0]; boff += 2
+        if int8_freq_c_len > 0:
+            int8_freq_bytes = lzma.decompress(int8_block[boff:boff + int8_freq_c_len], format=lzma.FORMAT_RAW, filters=freq_filters)
+        else:
+            int8_freq_bytes = b""
+        boff += int8_freq_c_len
+
+        int8_tensor_bytes = []
+        for ti in range(n_int8):
+            numel, c_len = struct.unpack_from("<II", int8_block, boff); boff += 8
+            c_bytes = int8_block[boff:boff + c_len]; boff += c_len
+            freq_u16 = np.frombuffer(int8_freq_bytes[ti * 512:(ti + 1) * 512], dtype=np.uint16).astype(np.float64)
+            probs = freq_u16 / freq_u16.sum()
+            compressed = np.frombuffer(c_bytes, dtype=np.uint32)
             decoder = constriction.stream.stack.AnsCoder(compressed)
             model = constriction.stream.model.Categorical(probs, perfect=False)
             zigzag = decoder.decode(model, numel)
-
-            # Reverse zigzag
             decoded = ((zigzag.astype(np.int16) >> 1) ^ -(zigzag.astype(np.int16) & 1)).astype(np.int8)
-            int8_decoded_parts.append(decoded.tobytes())
-        int8_raw = b"".join(int8_decoded_parts)
+            int8_tensor_bytes.append(decoded.tobytes())
+
+        # Merge int6 and int8 tensors in the correct key order
+        int6_idx = 0
+        int8_idx = 0
+        int8_raw_parts = []
+        for k in header["int8_keys"]:
+            base = k[:-2] if k.endswith(".q") else k
+            info = header["meta"].get(base)
+            if isinstance(info, dict) and info.get("type") == "int6":
+                int8_raw_parts.append(int6_tensor_bytes[int6_idx])
+                int6_idx += 1
+            else:
+                int8_raw_parts.append(int8_tensor_bytes[int8_idx])
+                int8_idx += 1
+        int8_raw = b"".join(int8_raw_parts)
     else:
         int8_raw = b""
     fp16_block = read_block()
