@@ -174,34 +174,48 @@ def encode_experiment(quant_result: dict[str, Tensor], quant_meta: dict[str, obj
 
     # Build raw byte streams — transpose 2D tensors
     streams = {}
-    # int8 stream: zigzag encode (maps 0,-1,1,-2,2,... to 0,1,2,3,4,...)
-    int8_parts = []
+    # int8 stream: per-tensor ANS with zigzag + tight alphabet
+    import constriction
+    int8_ans_parts = []  # (compressed_uint32_array, freq_table_bytes, max_sym, numel)
     for k in int8_keys:
         t = quant_result[k]
         if t.ndim == 2:
             t = t.t().contiguous()
-        arr = t.numpy().astype(np.int16)
-        # Standard zigzag: 0→0, -1→1, 1→2, -2→3, 2→4, ...
-        zigzag = ((arr << 1) ^ (arr >> 15)).astype(np.uint8)
-        int8_parts.append(zigzag.tobytes())
-    if int8_parts:
-        int8_blob = b"".join(int8_parts)
-        # Train a small dictionary for better compression
-        chunk_size = 65536
-        samples = [int8_blob[i:i+chunk_size] for i in range(0, min(len(int8_blob), 10_000_000), chunk_size)]
-        dict_data = zstandard.train_dictionary(256, samples[:100])
-        dict_bytes = dict_data.as_bytes()
-        comp_dict = zstandard.ZstdCompressor(level=22, dict_data=dict_data, write_content_size=False)
-        # Streaming with flush_block at tensor boundaries for better FSE tables
-        cctx = comp_dict.compressobj()
-        c_parts = []
-        for p in int8_parts:
-            c_parts.append(cctx.compress(p))
-            c_parts.append(cctx.flush(zstandard.COMPRESSOBJ_FLUSH_BLOCK))
-        c_parts.append(cctx.flush(zstandard.COMPRESSOBJ_FLUSH_FINISH))
-        compressed = b"".join(c_parts)
-        dict_c = zlib.compress(dict_bytes, 9)
-        streams["int8"] = struct.pack("B", len(dict_c)) + dict_c + compressed
+        arr = t.numpy().astype(np.int16).flatten()
+        zigzag = ((arr << 1) ^ (arr >> 15)).astype(np.int32)
+
+        # Determine alphabet size from quant type
+        base = k[:-2] if k.endswith(".q") else k
+        info = quant_meta.get(base)
+        max_sym = 64 if (isinstance(info, dict) and info.get("type") == "int6") else 256
+
+        # Build per-tensor frequency table (uint32 for exact encode/decode match)
+        freqs = np.bincount(zigzag, minlength=max_sym).astype(np.float64)[:max_sym]
+        freq_u32 = np.round(np.maximum(freqs, 1)).astype(np.uint32)
+        probs = freq_u32.astype(np.float64) / freq_u32.astype(np.float64).sum()
+
+        # ANS encode
+        model = constriction.stream.model.Categorical(probs, perfect=False)
+        encoder = constriction.stream.stack.AnsCoder()
+        encoder.encode_reverse(zigzag, model)
+        compressed = encoder.get_compressed()
+
+        # Store frequencies as uint32 for exact ANS roundtrip
+        # constriction needs the EXACT same probabilities for decode
+        freq_u32 = np.round(freqs).astype(np.uint32)
+        freq_u32 = np.maximum(freq_u32, 1)
+        int8_ans_parts.append((compressed, freq_u32, max_sym, len(zigzag)))
+
+    if int8_ans_parts:
+        # Pack ANS stream: [num_tensors(2)] then per-tensor: [max_sym(1)] [numel(4)] [compressed_len(4)] [freq_table] [compressed_data]
+        ans_out = struct.pack("<H", len(int8_ans_parts))
+        for compressed, freq_u32, max_sym, numel in int8_ans_parts:
+            c_data = compressed.tobytes()  # uint32 array as bytes
+            freq_bytes = freq_u32.tobytes()
+            ans_out += struct.pack("<HII", max_sym, numel, len(c_data))
+            ans_out += freq_bytes
+            ans_out += c_data
+        streams["int8"] = ans_out
 
     # fp16 stream: byte-shuffle (separate high and low bytes)
     fp16_parts = []
@@ -379,25 +393,36 @@ def decode_experiment(blob: bytes) -> tuple[dict[str, Tensor], dict[str, object]
         "byte_shuffle": True,
         "meta": quant_meta,
     }
+    # Decode per-tensor ANS int8 stream
+    import constriction
     int8_block = read_block()
     if header["int8_keys"] and int8_block:
-        dict_c_len = int8_block[0]
-        dict_bytes = zlib.decompress(int8_block[1:1 + dict_c_len])
-        dict_data = zstandard.ZstdCompressionDict(dict_bytes)
-        decomp_dict = zstandard.ZstdDecompressor(dict_data=dict_data, max_window_size=2**27)
-        # Calculate expected output size from shapes
-        total_int8 = sum(
-            np.prod(header["shapes"][k]) for k in header["int8_keys"]
-        )
-        int8_raw_zigzag = decomp_dict.decompress(int8_block[1 + dict_c_len:], max_output_size=total_int8)
-    else:
-        int8_raw_zigzag = b""
-    # Reverse zigzag encoding
-    if int8_raw_zigzag:
-        arr = np.frombuffer(int8_raw_zigzag, dtype=np.uint8).astype(np.int16)
-        # Standard zigzag decode: (v >>> 1) ^ -(v & 1)
-        decoded = ((arr >> 1) ^ -(arr & 1)).astype(np.int8)
-        int8_raw = decoded.tobytes()
+        boff = 0
+        num_tensors = struct.unpack_from("<H", int8_block, boff)[0]
+        boff += 2
+        int8_decoded_parts = []
+        for _ in range(num_tensors):
+            max_sym, numel, c_len = struct.unpack_from("<HII", int8_block, boff)
+            boff += 10
+            freq_bytes = int8_block[boff:boff + max_sym * 4]
+            boff += max_sym * 4
+            c_data = int8_block[boff:boff + c_len]
+            boff += c_len
+
+            # Reconstruct frequency table (must match encoder exactly)
+            freq_u32 = np.frombuffer(freq_bytes, dtype=np.uint32).astype(np.float64)
+            probs = freq_u32 / freq_u32.sum()
+
+            # ANS decode
+            compressed = np.frombuffer(c_data, dtype=np.uint32)
+            decoder = constriction.stream.stack.AnsCoder(compressed)
+            model = constriction.stream.model.Categorical(probs, perfect=False)
+            zigzag = decoder.decode(model, numel)
+
+            # Reverse zigzag
+            decoded = ((zigzag.astype(np.int16) >> 1) ^ -(zigzag.astype(np.int16) & 1)).astype(np.int8)
+            int8_decoded_parts.append(decoded.tobytes())
+        int8_raw = b"".join(int8_decoded_parts)
     else:
         int8_raw = b""
     fp16_block = read_block()
