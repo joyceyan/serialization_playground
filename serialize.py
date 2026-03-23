@@ -211,9 +211,9 @@ def encode_fork_baseline(quant_result: dict[str, Tensor], quant_meta: dict[str, 
     parts.append(cctx.flush(zstandard.COMPRESSOBJ_FLUSH_FINISH))
     c1 = b"".join(parts)
 
-    # Part 2: LZMA with lp=1 for fp16+metadata
+    # Part 2: LZMA with lc=0/lp=0/pb=0 for mixed fp16+metadata+central_dir
     part2 = raw[split_offset:]
-    filters = [{"id": lzma.FILTER_LZMA2, "preset": 9 | lzma.PRESET_EXTREME, "lc": 0, "lp": 1, "pb": 0}]
+    filters = [{"id": lzma.FILTER_LZMA2, "preset": 9 | lzma.PRESET_EXTREME, "lc": 0, "lp": 0, "pb": 0}]
     c2 = lzma.compress(part2, format=lzma.FORMAT_RAW, filters=filters)
 
     # Pack: [c1_len (4 bytes)] [c1] [c2]
@@ -230,7 +230,7 @@ def decode_fork_baseline(blob: bytes) -> tuple[dict[str, Tensor], dict[str, obje
     c2 = blob[4 + c1_len:]
     # Decompress both parts
     raw1 = zstandard.ZstdDecompressor().decompress(c1, max_output_size=50_000_000)
-    filters = [{"id": lzma.FILTER_LZMA2, "preset": 9 | lzma.PRESET_EXTREME, "lc": 0, "lp": 1, "pb": 0}]
+    filters = [{"id": lzma.FILTER_LZMA2, "preset": 9 | lzma.PRESET_EXTREME, "lc": 0, "lp": 0, "pb": 0}]
     raw2 = lzma.decompress(c2, format=lzma.FORMAT_RAW, filters=filters)
     raw = raw1 + raw2
     obj = torch.load(io.BytesIO(raw), map_location="cpu", weights_only=False)
