@@ -180,4 +180,19 @@ These strategies were proven effective in 55+ experiments on the same data. They
 **Result**: 15,346,648 bytes (-12,659 from P3-13b = **-1.07% total**). Major breakthrough!
 **Insight**: The ZIP format interleaves headers (structured, repetitive) with storage data (random-ish). Default zstd uses one set of FSE tables for the whole file. Flushing at entry boundaries lets zstd reset its entropy tables at natural data transitions, building better frequency models for each segment. This is especially valuable at the dtype transition (int8 → fp16) where the byte distribution changes dramatically.
 
-**Current best: 15,346,648 (-166,383 = -1.07%)**.
+### Exp P3-21: Tune flush interval to every 7 entries — KEPT
+**Result**: 15,341,741 (-4,907 from P3-20). Optimal interval found by exhaustive search over 1-29.
+
+### Exp P3-22: Split compression (streaming zstd + LZMA) — KEPT
+**Result**: 15,339,441 (-2,300 from P3-21 = -1.12%). Split at int8→fp16 boundary. LZMA for fp16+metadata, streaming zstd for int8.
+
+### Exp P3-23: Tune LZMA params for part 2 — KEPT
+**Result**: 15,339,077 (-364 from P3-22). lc=0/lp=0/pb=0 better than lp=1 for mixed content.
+
+### Exp P3-24: 3-way split — REVERTED
+**Result**: +2.3KB worse. Extra header overhead exceeds benefit of isolated pickle compression.
+
+### Exp P3-25: Different zstd levels — REVERTED
+**Result**: Level 22 still best (35b better than 21).
+
+**Current best: 15,339,077 (-173,954 = -1.12%)**.
