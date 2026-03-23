@@ -23,10 +23,8 @@ from serialize import (
     HAS_ZSTD,
     decode_baseline,
     decode_experiment,
-    decode_fork_baseline,
     encode_baseline,
     encode_experiment,
-    encode_fork_baseline,
     load_and_quantize,
     measure_scheme,
     mixed_quantize_int6,
@@ -144,7 +142,6 @@ def test_synthetic() -> None:
 
     schemes = [
         ("baseline_zstd22", encode_baseline, decode_baseline),
-        ("fork_baseline", encode_fork_baseline, decode_fork_baseline),
         ("experiment", encode_experiment, decode_experiment),
     ]
 
@@ -177,7 +174,6 @@ def test_real(model_path: str) -> None:
 
     schemes = [
         ("baseline_zstd22", encode_baseline, decode_baseline),
-        ("fork_baseline", encode_fork_baseline, decode_fork_baseline),
         ("experiment", encode_experiment, decode_experiment),
     ]
 
