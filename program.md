@@ -2,7 +2,7 @@
 
 ## Goal
 
-Beat `torch.save` + `zstd-22` on compressed size while preserving lossless roundtrip accuracy.
+Minimize the compressed size of `final_model.pt` (an int6/int8 quantized GPT state dict) by developing a custom serializer/deserializer (`encode_experiment`/`decode_experiment` in `serialize.py`) that beats `torch.save` + `zstd-22`. The result will be integrated into the Parameter Golf training script as the checkpoint save/load format. Changes that help this specific model but hurt others are fine.
 
 ## Setup
 
@@ -11,17 +11,19 @@ Do all of these steps immediately without asking for confirmation. You are fully
 This setup is **idempotent** — it can be re-run safely.
 
 1. **Read the codebase**: Read these files for full context:
-   - `serialize.py` — all serialization/deserialization implementations. This is the primary file you edit.
+   - `serialize.py` — all serialization/deserialization implementations. **This is the primary file you edit.**
    - `test_serialize.py` — correctness tests + benchmarks (roundtrip accuracy, compressed size, timing).
 
-3. **Run tests** to confirm everything is working:
+2. **Run tests** to confirm everything is working:
    ```bash
    cd /Users/jyan/src/serialization_playground && python test_serialize.py
    ```
 
-4. **Check for existing progress**: Read `results.tsv` and `notes.md` (if they have entries beyond the baseline). Review what's been tried and what to try next.
+3. **Check for existing progress**: Read `notes.md` and `results.tsv` to review what's been tried and what to try next.
 
 ## Baseline
+
+**15,513,031 bytes** — `torch.save` + `zstd-22` (`encode_baseline` in serialize.py).
 
 The baseline serializes a dict of torch tensors:
 ```python
@@ -48,7 +50,7 @@ LOOP FOREVER:
 
 1. **Review context**: Read `notes.md` and `results.tsv` to review what's been tried, what worked, and what to try next.
 
-2. **Design the next experiment** based on insights from the notebook. Check the "Ideas queue" section of `notes.md` first. Make exactly one change to `serialize.py`.
+2. **Design the next experiment** based on insights from the notebook. Check the "Ideas queue" section of `notes.md` first. Make a change to `serialize.py`.
 
 3. `git commit -am "description of experiment"`
 

@@ -6,9 +6,9 @@ Read `program.md` for full setup and experiment methodology.
 
 ## Critical constraints
 
-- **Goal**: Minimize compressed artifact size vs the baseline (`torch.save` + `zstd-22`).
-- **Roundtrip correctness**: Every serialization scheme MUST produce identical dequantized tensors (or acceptably close — measure max absolute error).
-- **Packages**: torch, numpy, zstandard, and stdlib. See requirements.txt.
+- **Goal**: Minimize the compressed size of `final_model.pt` by developing a custom serializer/deserializer that beats `torch.save` + `zstd-22`.
+- **Roundtrip correctness**: Every serialization scheme MUST produce identical dequantized tensors (max absolute error = 0.0 for lossless).
+- **Packages**: torch, numpy, zstandard, constriction, and stdlib. See requirements.txt.
 - **Test artifact**: `final_model.pt` (H100 unquantized state dict). Loaded and quantized via `serialize.load_and_quantize()`.
 
 ## Experiment loop checklist
@@ -16,7 +16,7 @@ Read `program.md` for full setup and experiment methodology.
 Every iteration, follow these steps in order:
 
 1. **Read** `notes.md` and `results.tsv` to understand what's been tried.
-2. **Design** one experiment. Edit `serialize.py` to implement the new scheme.
+2. **Design** one experiment. Edit `serialize.py` to implement the change.
 3. **Run tests + benchmark**: `python test_serialize.py`
 4. **Log to `results.tsv`** (tab-separated).
 5. **Update `notes.md`**: hypothesis, result, insights.
@@ -25,7 +25,7 @@ Every iteration, follow these steps in order:
 
 ## Key principles
 
-- **Measure everything**: Always compare against the baseline (`torch.save` + `zstd-22`).
+- **Measure everything**: Always compare against the baseline (`torch.save` + `zstd-22` = 15,513,031 bytes).
 - **Bit-level thinking**: Every wasted bit × 26M values = significant bytes.
 - **Compression-friendly**: Patterns that compress well matter more than raw size.
 - **Roundtrip accuracy**: Any lossy scheme must measure and report max absolute error.

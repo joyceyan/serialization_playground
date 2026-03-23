@@ -205,13 +205,20 @@ def encode_experiment(quant_result: dict[str, Tensor], quant_meta: dict[str, obj
         int8_ans_parts.append((compressed, freq_u16, max_sym, len(zigzag)))
 
     if int8_ans_parts:
-        # Pack ANS stream: [num_tensors(2)] then per-tensor: [max_sym(1)] [numel(4)] [compressed_len(4)] [freq_table] [compressed_data]
-        ans_out = struct.pack("<H", len(int8_ans_parts))
+        # Pack freq tables together and LZMA-compress them
+        all_freq_bytes = b""
+        tensor_meta = []  # (max_sym, numel, c_data_bytes)
         for compressed, freq_u16, max_sym, numel in int8_ans_parts:
-            c_data = compressed.tobytes()  # uint32 array as bytes
-            freq_bytes = freq_u16.tobytes()
+            all_freq_bytes += freq_u16.tobytes()
+            tensor_meta.append((max_sym, numel, compressed.tobytes()))
+        freq_filters = [{"id": lzma.FILTER_LZMA2, "preset": 9 | lzma.PRESET_EXTREME, "lc": 0, "lp": 0, "pb": 0}]
+        freq_compressed = lzma.compress(all_freq_bytes, format=lzma.FORMAT_RAW, filters=freq_filters)
+
+        # Pack: [num_tensors(2)] [freq_block_len(2)] [freq_block] per-tensor: [max_sym(2)] [numel(4)] [c_len(4)] [c_data]
+        ans_out = struct.pack("<HH", len(int8_ans_parts), len(freq_compressed))
+        ans_out += freq_compressed
+        for max_sym, numel, c_data in tensor_meta:
             ans_out += struct.pack("<HII", max_sym, numel, len(c_data))
-            ans_out += freq_bytes
             ans_out += c_data
         streams["int8"] = ans_out
 
@@ -396,19 +403,24 @@ def decode_experiment(blob: bytes) -> tuple[dict[str, Tensor], dict[str, object]
     int8_block = read_block()
     if header["int8_keys"] and int8_block:
         boff = 0
-        num_tensors = struct.unpack_from("<H", int8_block, boff)[0]
-        boff += 2
+        num_tensors, freq_block_len = struct.unpack_from("<HH", int8_block, boff)
+        boff += 4
+        # Decompress frequency tables
+        freq_filters = [{"id": lzma.FILTER_LZMA2, "preset": 9 | lzma.PRESET_EXTREME, "lc": 0, "lp": 0, "pb": 0}]
+        all_freq_bytes = lzma.decompress(int8_block[boff:boff + freq_block_len], format=lzma.FORMAT_RAW, filters=freq_filters)
+        boff += freq_block_len
+        freq_off = 0
+
         int8_decoded_parts = []
         for _ in range(num_tensors):
             max_sym, numel, c_len = struct.unpack_from("<HII", int8_block, boff)
             boff += 10
-            freq_bytes = int8_block[boff:boff + max_sym * 2]
-            boff += max_sym * 2
             c_data = int8_block[boff:boff + c_len]
             boff += c_len
 
-            # Reconstruct frequency table (must match encoder exactly)
-            freq_u16 = np.frombuffer(freq_bytes, dtype=np.uint16).astype(np.float64)
+            # Get freq table from decompressed block
+            freq_u16 = np.frombuffer(all_freq_bytes[freq_off:freq_off + max_sym * 2], dtype=np.uint16).astype(np.float64)
+            freq_off += max_sym * 2
             probs = freq_u16 / freq_u16.sum()
 
             # ANS decode
