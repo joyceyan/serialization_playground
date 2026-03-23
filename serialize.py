@@ -187,27 +187,52 @@ def encode_fork_baseline(quant_result: dict[str, Tensor], quant_meta: dict[str, 
             continue
         pos += 1
 
-    # Streaming zstd-22 with flush_block every 7 ZIP entries (empirically optimal)
+    # Split compression: streaming zstd for int8 region, LZMA for fp16+metadata
+    # Find split point: after last large (>100KB) storage entry
+    last_large_idx = 0
+    for i in range(len(segments) - 1):
+        size = segments[i+1][0] - segments[i][0]
+        if size > 100000:
+            last_large_idx = i
+    split_idx = last_large_idx + 1
+    split_offset = segments[split_idx][0] if split_idx < len(segments) else len(raw)
+
+    # Part 1: streaming zstd-22 with flush_block every 7 entries
     comp = zstandard.ZstdCompressor(level=22, write_content_size=False)
     cctx = comp.compressobj()
     parts = []
     prev = 0
-    for i, (offset, fname) in enumerate(segments[1:]):
+    for i, (offset, fname) in enumerate(segments[1:split_idx]):
         parts.append(cctx.compress(raw[prev:offset]))
         if (i + 1) % 7 == 0:
             parts.append(cctx.flush(zstandard.COMPRESSOBJ_FLUSH_BLOCK))
         prev = offset
-    parts.append(cctx.compress(raw[prev:]))
+    parts.append(cctx.compress(raw[prev:split_offset]))
     parts.append(cctx.flush(zstandard.COMPRESSOBJ_FLUSH_FINISH))
-    return b"".join(parts)
+    c1 = b"".join(parts)
+
+    # Part 2: LZMA with lp=1 for fp16+metadata
+    part2 = raw[split_offset:]
+    filters = [{"id": lzma.FILTER_LZMA2, "preset": 9 | lzma.PRESET_EXTREME, "lc": 0, "lp": 1, "pb": 0}]
+    c2 = lzma.compress(part2, format=lzma.FORMAT_RAW, filters=filters)
+
+    # Pack: [c1_len (4 bytes)] [c1] [c2]
+    return struct.pack("<I", len(c1)) + c1 + c2
 
 
 def decode_fork_baseline(blob: bytes) -> tuple[dict[str, Tensor], dict[str, object]]:
-    """Decode using the active torch."""
+    """Decode split-compressed fork output."""
     if not HAS_ZSTD:
         raise ImportError("zstandard not installed")
-    # Estimate max output: raw torch.save is ~27MB for this model
-    raw = zstandard.ZstdDecompressor().decompress(blob, max_output_size=50_000_000)
+    # Split format: [c1_len (4)] [c1 = zstd] [c2 = LZMA]
+    c1_len = struct.unpack_from("<I", blob, 0)[0]
+    c1 = blob[4:4 + c1_len]
+    c2 = blob[4 + c1_len:]
+    # Decompress both parts
+    raw1 = zstandard.ZstdDecompressor().decompress(c1, max_output_size=50_000_000)
+    filters = [{"id": lzma.FILTER_LZMA2, "preset": 9 | lzma.PRESET_EXTREME, "lc": 0, "lp": 1, "pb": 0}]
+    raw2 = lzma.decompress(c2, format=lzma.FORMAT_RAW, filters=filters)
+    raw = raw1 + raw2
     obj = torch.load(io.BytesIO(raw), map_location="cpu", weights_only=False)
     return obj["w"], obj["m"]
 
