@@ -189,10 +189,12 @@ def encode_experiment(quant_result: dict[str, Tensor], quant_meta: dict[str, obj
         info = quant_meta.get(base)
         max_sym = 64 if (isinstance(info, dict) and info.get("type") == "int6") else 256
 
-        # Build per-tensor frequency table (uint32 for exact encode/decode match)
+        # Build per-tensor frequency table (uint16 for compact storage)
         freqs = np.bincount(zigzag, minlength=max_sym).astype(np.float64)[:max_sym]
-        freq_u32 = np.round(np.maximum(freqs, 1)).astype(np.uint32)
-        probs = freq_u32.astype(np.float64) / freq_u32.astype(np.float64).sum()
+        freqs = np.maximum(freqs, 1)
+        freq_u16 = np.round(freqs / freqs.sum() * 65535).astype(np.uint16)
+        freq_u16 = np.maximum(freq_u16, 1)
+        probs = freq_u16.astype(np.float64) / freq_u16.astype(np.float64).sum()
 
         # ANS encode
         model = constriction.stream.model.Categorical(probs, perfect=False)
@@ -200,18 +202,14 @@ def encode_experiment(quant_result: dict[str, Tensor], quant_meta: dict[str, obj
         encoder.encode_reverse(zigzag, model)
         compressed = encoder.get_compressed()
 
-        # Store frequencies as uint32 for exact ANS roundtrip
-        # constriction needs the EXACT same probabilities for decode
-        freq_u32 = np.round(freqs).astype(np.uint32)
-        freq_u32 = np.maximum(freq_u32, 1)
-        int8_ans_parts.append((compressed, freq_u32, max_sym, len(zigzag)))
+        int8_ans_parts.append((compressed, freq_u16, max_sym, len(zigzag)))
 
     if int8_ans_parts:
         # Pack ANS stream: [num_tensors(2)] then per-tensor: [max_sym(1)] [numel(4)] [compressed_len(4)] [freq_table] [compressed_data]
         ans_out = struct.pack("<H", len(int8_ans_parts))
-        for compressed, freq_u32, max_sym, numel in int8_ans_parts:
+        for compressed, freq_u16, max_sym, numel in int8_ans_parts:
             c_data = compressed.tobytes()  # uint32 array as bytes
-            freq_bytes = freq_u32.tobytes()
+            freq_bytes = freq_u16.tobytes()
             ans_out += struct.pack("<HII", max_sym, numel, len(c_data))
             ans_out += freq_bytes
             ans_out += c_data
@@ -404,14 +402,14 @@ def decode_experiment(blob: bytes) -> tuple[dict[str, Tensor], dict[str, object]
         for _ in range(num_tensors):
             max_sym, numel, c_len = struct.unpack_from("<HII", int8_block, boff)
             boff += 10
-            freq_bytes = int8_block[boff:boff + max_sym * 4]
-            boff += max_sym * 4
+            freq_bytes = int8_block[boff:boff + max_sym * 2]
+            boff += max_sym * 2
             c_data = int8_block[boff:boff + c_len]
             boff += c_len
 
             # Reconstruct frequency table (must match encoder exactly)
-            freq_u32 = np.frombuffer(freq_bytes, dtype=np.uint32).astype(np.float64)
-            probs = freq_u32 / freq_u32.sum()
+            freq_u16 = np.frombuffer(freq_bytes, dtype=np.uint16).astype(np.float64)
+            probs = freq_u16 / freq_u16.sum()
 
             # ANS decode
             compressed = np.frombuffer(c_data, dtype=np.uint32)
