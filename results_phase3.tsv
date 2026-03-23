@@ -24,3 +24,6 @@ P3-19_merge_storages	15361794	27006130	0.5688	0.0	reverted	merge same-dtype stor
 P3-20_streaming_flush	15346648	27006130	0.5683	0.0	kept	streaming zstd with flush_block at ZIP entries (-12.7KB!)
 P3-21_flush_every7	15341741	27006130	0.5681	0.0	kept	tune flush to every 7 entries (-4.9KB)
 P3-22_split_lzma	15339441	27006130	0.5680	0.0	kept	split: streaming zstd + LZMA for fp16/meta (-2.3KB)
+P3-23_lzma_params	15339077	27006130	0.5680	0.0	kept	tune LZMA lp=0 for part 2 (-364b)
+P3-24_3way_split	15341332	27006130	0.5681	0.0	reverted	3-way split (+2.3KB, extra overhead)
+P3-24b_brotli	15993406	N/A	N/A	0.0	reverted	brotli for int8 region (+672KB)
