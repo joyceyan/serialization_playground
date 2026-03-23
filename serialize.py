@@ -178,9 +178,7 @@ def encode_experiment(quant_result: dict[str, Tensor], quant_meta: dict[str, obj
     import constriction
     int8_ans_parts = []  # (compressed_uint32_array, freq_table_bytes, max_sym, numel)
     for k in int8_keys:
-        t = quant_result[k]
-        if t.ndim == 2:
-            t = t.t().contiguous()
+        t = quant_result[k].contiguous()
         arr = t.numpy().astype(np.int16).flatten()
         zigzag = ((arr << 1) ^ (arr >> 15)).astype(np.int32)
 
@@ -225,9 +223,7 @@ def encode_experiment(quant_result: dict[str, Tensor], quant_meta: dict[str, obj
     # fp16 stream: byte-shuffle (separate high and low bytes)
     fp16_parts = []
     for k in fp16_keys:
-        t = quant_result[k]
-        if t.ndim == 2:
-            t = t.t().contiguous()
+        t = quant_result[k].contiguous()
         fp16_parts.append(t.numpy().tobytes())
     if fp16_parts:
         raw = b"".join(fp16_parts)
@@ -475,7 +471,6 @@ def decode_experiment(blob: bytes) -> tuple[dict[str, Tensor], dict[str, object]
                  "fp32": (torch.float32, fp32_raw, np.float32)}
 
     w = {}
-    transposed = header.get("transposed", set())
     offsets = {"int8": 0, "fp16": 0, "fp32": 0}
     for label, keys in [("int8", header["int8_keys"]), ("fp16", header["fp16_keys"]), ("fp32", header["fp32_keys"])]:
         dt, raw, npdt = dtype_map[label]
@@ -487,8 +482,8 @@ def decode_experiment(blob: bytes) -> tuple[dict[str, Tensor], dict[str, object]
             nbytes = numel * np.dtype(npdt).itemsize
             arr = np.frombuffer(raw, dtype=npdt, count=numel, offset=offsets[label])
             offsets[label] += nbytes
-            if k in transposed:
-                t = torch.from_numpy(arr.copy()).reshape(shape[1], shape[0]).t().contiguous()
+            if False:  # No transpose needed — ANS doesn't benefit from it
+                pass
             else:
                 t = torch.from_numpy(arr.copy()).reshape(shape)
             w[k] = t
