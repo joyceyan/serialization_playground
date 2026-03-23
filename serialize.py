@@ -189,7 +189,7 @@ def encode_experiment(quant_result: dict[str, Tensor], quant_meta: dict[str, obj
             int8_only_keys.append(k)
 
     # === INT6: K-means clustered row models ===
-    N_CLUSTERS = 16
+    N_CLUSTERS = 20
     int6_row_data = []      # zigzag int32 arrays per row
     int6_row_dists = []     # per-row probability distributions
     int6_row_tensor_idx = [] # which tensor each row belongs to

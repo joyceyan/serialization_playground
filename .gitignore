@@ -1,0 +1,22 @@
+__pycache__/
+*.pyc
+
+# Large model artifacts
+final_model.pt
+final_model.int6.ptz
+*.ptz
+
+# macOS
+.DS_Store
+
+# Editor / tool caches
+.ruff_cache/
+.vscode/
+.idea/
+
+# Torch fork build (if present)
+torch_fork_repo/
+torch_fork/
+
+# Old wrapper (replaced by inline functions in train_gpt_submit.py)
+torch_save_fork.py
