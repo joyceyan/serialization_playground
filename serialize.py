@@ -189,7 +189,7 @@ def encode_experiment(quant_result: dict[str, Tensor], quant_meta: dict[str, obj
             int8_only_keys.append(k)
 
     # === INT6: K-means clustered row models ===
-    N_CLUSTERS = 20
+    N_CLUSTERS = 16
     int6_row_data = []      # zigzag int32 arrays per row
     int6_row_dists = []     # per-row probability distributions
     int6_row_tensor_idx = [] # which tensor each row belongs to
@@ -221,7 +221,7 @@ def encode_experiment(quant_result: dict[str, Tensor], quant_meta: dict[str, obj
 
     # K-means clustering
     dist_matrix = np.array(int6_row_dists)
-    centroids, labels = kmeans2(dist_matrix, N_CLUSTERS, minit="points", iter=20)
+    centroids, labels = kmeans2(dist_matrix, N_CLUSTERS, minit="points", iter=50, seed=97)
 
     # Build per-cluster frequency tables and encode
     cluster_compressed = []  # (cluster_id, compressed_bytes)
@@ -245,12 +245,15 @@ def encode_experiment(quant_result: dict[str, Tensor], quant_meta: dict[str, obj
         encoder.encode_reverse(cluster_data, model)
         cluster_compressed.append(encoder.get_compressed().tobytes())
 
-    # Compress labels (4-bit packed + LZMA)
-    packed_labels = np.zeros((len(labels) + 1) // 2, dtype=np.uint8)
-    for i in range(0, len(labels) - 1, 2):
-        packed_labels[i // 2] = (labels[i] << 4) | labels[i + 1]
-    if len(labels) % 2:
-        packed_labels[-1] = labels[-1] << 4
+    # Compress labels (1 byte per label for K > 16, 4-bit packed for K <= 16)
+    if N_CLUSTERS <= 16:
+        packed_labels = np.zeros((len(labels) + 1) // 2, dtype=np.uint8)
+        for i in range(0, len(labels) - 1, 2):
+            packed_labels[i // 2] = (labels[i] << 4) | labels[i + 1]
+        if len(labels) % 2:
+            packed_labels[-1] = labels[-1] << 4
+    else:
+        packed_labels = labels.astype(np.uint8)
     freq_filters = [{"id": lzma.FILTER_LZMA2, "preset": 9 | lzma.PRESET_EXTREME, "lc": 0, "lp": 0, "pb": 0}]
     labels_compressed = lzma.compress(packed_labels.tobytes(), format=lzma.FORMAT_RAW, filters=freq_filters)
 
@@ -495,14 +498,17 @@ def decode_experiment(blob: bytes) -> tuple[dict[str, Tensor], dict[str, object]
         labels_c_len = struct.unpack_from("<H", int8_block, boff)[0]; boff += 2
         labels_packed = lzma.decompress(int8_block[boff:boff + labels_c_len], format=lzma.FORMAT_RAW, filters=freq_filters)
         boff += labels_c_len
-        # Unpack 4-bit labels
+        # Unpack labels
         labels_arr = np.frombuffer(labels_packed, dtype=np.uint8)
-        labels = np.empty(n_rows, dtype=np.int32)
-        for i in range(0, n_rows - 1, 2):
-            labels[i] = labels_arr[i // 2] >> 4
-            labels[i + 1] = labels_arr[i // 2] & 0x0F
-        if n_rows % 2:
-            labels[n_rows - 1] = labels_arr[n_rows // 2] >> 4
+        if n_clusters <= 16:
+            labels = np.empty(n_rows, dtype=np.int32)
+            for i in range(0, n_rows - 1, 2):
+                labels[i] = labels_arr[i // 2] >> 4
+                labels[i + 1] = labels_arr[i // 2] & 0x0F
+            if n_rows % 2:
+                labels[n_rows - 1] = labels_arr[n_rows // 2] >> 4
+        else:
+            labels = labels_arr[:n_rows].astype(np.int32)
 
         # Parse cluster frequency tables
         cluster_probs = []
