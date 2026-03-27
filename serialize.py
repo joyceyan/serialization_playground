@@ -308,8 +308,10 @@ def encode_experiment(quant_result: dict[str, Tensor], quant_meta: dict[str, obj
     streams["int8"] = ans_out
 
     # fp16 stream: byte-shuffle (separate high and low bytes)
+    # Order: passthrough tensors first (better LZMA compression)
+    fp16_ordered = sorted(fp16_keys, key=lambda k: (0 if ".scale" not in k else 1, k))
     fp16_parts = []
-    for k in fp16_keys:
+    for k in fp16_ordered:
         t = quant_result[k].contiguous()
         fp16_parts.append(t.numpy().tobytes())
     if fp16_parts:
@@ -635,7 +637,9 @@ def decode_experiment(blob: bytes) -> tuple[dict[str, Tensor], dict[str, object]
 
     w = {}
     offsets = {"int8": 0, "fp16": 0, "fp32": 0}
-    for label, keys in [("int8", header["int8_keys"]), ("fp16", header["fp16_keys"]), ("fp32", header["fp32_keys"])]:
+    # fp16 keys ordered: passthrough first, then scales (must match encoder)
+    fp16_keys_ordered = sorted(header["fp16_keys"], key=lambda k: (0 if ".scale" not in k else 1, k))
+    for label, keys in [("int8", header["int8_keys"]), ("fp16", fp16_keys_ordered), ("fp32", header["fp32_keys"])]:
         dt, raw, npdt = dtype_map[label]
         for k in keys:
             shape = header["shapes"][k]
