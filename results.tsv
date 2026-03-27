@@ -69,4 +69,8 @@ exp55_arch_params	15327351	27006130	0.5676	0.0	kept	derive shapes from arch para
 exp56_per_tensor_ans	15212620	27006130	0.5633	0.0	kept	per-tensor ANS replaces zstd for int8 (-114,731 = -1.94%!)
 exp57_u16_freq	15203916	27006130	0.5630	0.0	kept	uint16 freq tables (-8.7KB)
 exp58_lzma_freq	15199564	27006130	0.5628	0.0	kept	LZMA-compressed freq tables (-4.4KB = -2.02%!)
+exp59_no_transpose	15199435	27006130	0.5628	0.0	kept	remove unnecessary transpose (-129b)
+exp60_kmeans_cluster	15156254	27006130	0.5612	0.0	kept	K=16 row-distribution clustering (-43KB = -2.30%!)
+exp61_hellinger	15150333	27006130	0.5610	0.0	kept	Hellinger K-means distance metric (-3.8KB = -2.34%)
+exp62_single_stream	15150085	27006130	0.5610	0.0	kept	single-stream ANS + derive nrows (-248b = -2.34%)
 exp33_zstd_dict256	15329145	27006130	0.5677	0.0	kept	256-byte zstd dictionary (-1.3KB new best!)
