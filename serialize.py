@@ -221,7 +221,7 @@ def encode_experiment(quant_result: dict[str, Tensor], quant_meta: dict[str, obj
 
     # K-means clustering on sqrt(probs) — Hellinger distance is better for distributions
     dist_matrix = np.sqrt(np.array(int6_row_dists))
-    centroids, labels = kmeans2(dist_matrix, N_CLUSTERS, minit="points", iter=50, seed=195)
+    centroids, labels = kmeans2(dist_matrix, N_CLUSTERS, minit="random", iter=100, seed=286)
 
     # Build per-cluster frequency tables
     cluster_freq_u16 = []
