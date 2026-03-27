@@ -219,9 +219,9 @@ def encode_experiment(quant_result: dict[str, Tensor], quant_meta: dict[str, obj
             int6_row_dists.append(freqs / freqs.sum())
             int6_row_tensor_idx.append(ti)
 
-    # K-means clustering
-    dist_matrix = np.array(int6_row_dists)
-    centroids, labels = kmeans2(dist_matrix, N_CLUSTERS, minit="points", iter=50, seed=97)
+    # K-means clustering on sqrt(probs) — Hellinger distance is better for distributions
+    dist_matrix = np.sqrt(np.array(int6_row_dists))
+    centroids, labels = kmeans2(dist_matrix, N_CLUSTERS, minit="points", iter=50, seed=195)
 
     # Build per-cluster frequency tables and encode
     cluster_compressed = []  # (cluster_id, compressed_bytes)
