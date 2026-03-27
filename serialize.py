@@ -223,14 +223,14 @@ def encode_experiment(quant_result: dict[str, Tensor], quant_meta: dict[str, obj
     dist_matrix = np.sqrt(np.array(int6_row_dists))
     centroids, labels = kmeans2(dist_matrix, N_CLUSTERS, minit="points", iter=50, seed=195)
 
-    # Build per-cluster frequency tables and encode
-    cluster_compressed = []  # (cluster_id, compressed_bytes)
+    # Build per-cluster frequency tables
     cluster_freq_u16 = []
+    cluster_models = []
     for c in range(N_CLUSTERS):
         mask = labels == c
         if not mask.any():
             cluster_freq_u16.append(np.ones(64, dtype=np.uint16))
-            cluster_compressed.append(b"")
+            cluster_models.append(None)
             continue
         cluster_data = np.concatenate([int6_row_data[i] for i in range(len(labels)) if labels[i] == c])
         freqs = np.bincount(cluster_data, minlength=64)[:64].astype(np.float64)
@@ -239,11 +239,14 @@ def encode_experiment(quant_result: dict[str, Tensor], quant_meta: dict[str, obj
         freq_u16 = np.maximum(freq_u16, 1)
         probs = freq_u16.astype(np.float64) / freq_u16.astype(np.float64).sum()
         cluster_freq_u16.append(freq_u16)
+        cluster_models.append(constriction.stream.model.Categorical(probs, perfect=False))
 
-        model = constriction.stream.model.Categorical(probs, perfect=False)
-        encoder = constriction.stream.stack.AnsCoder()
-        encoder.encode_reverse(cluster_data, model)
-        cluster_compressed.append(encoder.get_compressed().tobytes())
+    # Single-stream ANS with model switching per row (encode in reverse)
+    encoder = constriction.stream.stack.AnsCoder()
+    for i in range(len(int6_row_data) - 1, -1, -1):
+        c = labels[i]
+        encoder.encode_reverse(int6_row_data[i], cluster_models[c])
+    int6_compressed = encoder.get_compressed().tobytes()
 
     # Compress labels (1 byte per label for K > 16, 4-bit packed for K <= 16)
     if N_CLUSTERS <= 16:
@@ -293,11 +296,9 @@ def encode_experiment(quant_result: dict[str, Tensor], quant_meta: dict[str, obj
     )
     ans_out += struct.pack("<H", len(freq_compressed)) + freq_compressed
     ans_out += struct.pack("<H", len(labels_compressed)) + labels_compressed
-    for c_data in cluster_compressed:
-        ans_out += struct.pack("<I", len(c_data)) + c_data
-    # Tensor row counts (to reconstruct row-to-tensor mapping)
-    for nr in int6_tensor_nrows:
-        ans_out += struct.pack("<H", nr)
+    # Single ANS stream for all int6 data
+    ans_out += struct.pack("<I", len(int6_compressed)) + int6_compressed
+    # Tensor row counts derivable from architecture params — not stored
     # Int8 tensors
     int8_freq_bytes = b"".join(f.tobytes() for _, f, _ in int8_parts)
     int8_freq_c = lzma.compress(int8_freq_bytes, format=lzma.FORMAT_RAW, filters=freq_filters) if int8_parts else b""
@@ -517,37 +518,18 @@ def decode_experiment(blob: bytes) -> tuple[dict[str, Tensor], dict[str, object]
             probs = freq_u16 / freq_u16.sum()
             cluster_probs.append(probs)
 
-        # Decode per-cluster ANS data
-        cluster_data = {}
-        for c in range(n_clusters):
-            c_len = struct.unpack_from("<I", int8_block, boff)[0]; boff += 4
-            if c_len == 0:
-                cluster_data[c] = np.array([], dtype=np.int32)
-                continue
-            c_bytes = int8_block[boff:boff + c_len]; boff += c_len
-            compressed = np.frombuffer(c_bytes, dtype=np.uint32)
-            decoder = constriction.stream.stack.AnsCoder(compressed)
-            model = constriction.stream.model.Categorical(cluster_probs[c], perfect=False)
-            n_in_cluster = int(np.sum(labels == c))
-            # Need total values in cluster — sum of row lengths
-            # For now, decode all and split later
-            # Actually we need the total number of values per cluster
-            pass  # will compute below
+        # Single ANS stream for all int6 data
+        int6_c_len = struct.unpack_from("<I", int8_block, boff)[0]; boff += 4
+        int6_c_bytes = int8_block[boff:boff + int6_c_len]; boff += int6_c_len
 
-        # Tensor row counts
-        tensor_nrows = []
-        for _ in range(n_int6):
-            nr = struct.unpack_from("<H", int8_block, boff)[0]; boff += 2
-            tensor_nrows.append(nr)
-
-        # Compute per-row ncols from tensor shapes
-        int6_keys_sorted = [k for k in sorted(quant_meta.keys())
-                           if isinstance(quant_meta.get(k), dict) and quant_meta[k].get("type") == "int6"]
-        # Map to actual tensor keys (.q suffix)
+        # Derive tensor row counts from shapes
         int6_q_keys = [k for k in header["int8_keys"]
-                       if any(k.startswith(mk) for mk in int6_keys_sorted)
-                       and isinstance(quant_meta.get(k[:-2] if k.endswith(".q") else k), dict)
-                       and quant_meta.get(k[:-2] if k.endswith(".q") else k, {}).get("type") == "int6"]
+                       if isinstance(header["meta"].get(k[:-2] if k.endswith(".q") else k), dict)
+                       and header["meta"].get(k[:-2] if k.endswith(".q") else k, {}).get("type") == "int6"]
+        tensor_nrows = []
+        for k in int6_q_keys:
+            shape = header["shapes"][k]
+            tensor_nrows.append(shape[0] if len(shape) >= 2 else 1)
 
         row_ncols = []
         for ti, nr in enumerate(tensor_nrows):
@@ -556,32 +538,14 @@ def decode_experiment(blob: bytes) -> tuple[dict[str, Tensor], dict[str, object]
             for _ in range(nr):
                 row_ncols.append(ncols)
 
-        # Now decode each cluster with the correct total symbol count
-        cluster_decoded = {}
-        # Re-read cluster data
-        boff_clusters = 10 + 2 + freq_c_len + 2 + labels_c_len  # back to cluster data
-        for c in range(n_clusters):
-            c_len = struct.unpack_from("<I", int8_block, boff_clusters)[0]; boff_clusters += 4
-            if c_len == 0:
-                cluster_decoded[c] = np.array([], dtype=np.int32)
-                continue
-            c_bytes = int8_block[boff_clusters:boff_clusters + c_len]; boff_clusters += c_len
-            compressed = np.frombuffer(c_bytes, dtype=np.uint32)
-            decoder = constriction.stream.stack.AnsCoder(compressed)
-            model = constriction.stream.model.Categorical(cluster_probs[c], perfect=False)
-            total_syms = sum(row_ncols[i] for i in range(n_rows) if labels[i] == c)
-            zigzag = decoder.decode(model, total_syms)
-            cluster_decoded[c] = zigzag
-
-        # Reconstruct rows in order
-        cluster_offsets = {c: 0 for c in range(n_clusters)}
+        # Decode single ANS stream row by row with per-row cluster model
+        cluster_models_dec = [constriction.stream.model.Categorical(p, perfect=False) for p in cluster_probs]
+        int6_decoder = constriction.stream.stack.AnsCoder(np.frombuffer(int6_c_bytes, dtype=np.uint32))
         int6_decoded = []
         for row_idx in range(n_rows):
             c = int(labels[row_idx])
             ncols = row_ncols[row_idx]
-            off_c = cluster_offsets[c]
-            row_zigzag = cluster_decoded[c][off_c:off_c + ncols]
-            cluster_offsets[c] += ncols
+            row_zigzag = int6_decoder.decode(cluster_models_dec[c], ncols)
             decoded = ((row_zigzag.astype(np.int16) >> 1) ^ -(row_zigzag.astype(np.int16) & 1)).astype(np.int8)
             int6_decoded.append(decoded.tobytes())
 
