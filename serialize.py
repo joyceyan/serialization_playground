@@ -317,8 +317,8 @@ def encode_experiment(quant_result: dict[str, Tensor], quant_meta: dict[str, obj
         arr = np.frombuffer(raw, dtype=np.uint8)
         high = arr[0::2].tobytes()  # high bytes
         low = arr[1::2].tobytes()   # low bytes
-        # Use raw LZMA2 with lp=1 (byte-shuffled data has 2-byte period)
-        filters = [{"id": lzma.FILTER_LZMA2, "preset": 9 | lzma.PRESET_EXTREME, "lc": 0, "lp": 1, "pb": 0}]
+        # Use raw LZMA2 with lp=0 (slightly better than lp=1 on this mixed data)
+        filters = [{"id": lzma.FILTER_LZMA2, "preset": 9 | lzma.PRESET_EXTREME, "lc": 0, "lp": 0, "pb": 0}]
         streams["fp16"] = lzma.compress(high + low, format=lzma.FORMAT_RAW, filters=filters)
 
     # fp32 stream: byte-shuffle (4 sub-streams)
@@ -596,7 +596,7 @@ def decode_experiment(blob: bytes) -> tuple[dict[str, Tensor], dict[str, object]
         int8_raw = b""
     fp16_block = read_block()
     if header["fp16_keys"]:
-        filters = [{"id": lzma.FILTER_LZMA2, "preset": 9 | lzma.PRESET_EXTREME, "lc": 0, "lp": 1, "pb": 0}]
+        filters = [{"id": lzma.FILTER_LZMA2, "preset": 9 | lzma.PRESET_EXTREME, "lc": 0, "lp": 0, "pb": 0}]
         fp16_raw_shuffled = lzma.decompress(fp16_block, format=lzma.FORMAT_RAW, filters=filters)
     else:
         fp16_raw_shuffled = b""
