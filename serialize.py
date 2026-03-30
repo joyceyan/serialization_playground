@@ -146,14 +146,71 @@ def decode_baseline(blob: bytes) -> tuple[dict[str, Tensor], dict[str, object]]:
 
 
 # ==============================================================================
-# EXPERIMENT: separate streams by dtype, transpose, zstd-22
+# EXPERIMENT: K-means clustered ANS + LZMA
 # ==============================================================================
 
 def _sorted_keys(d):
     return sorted(d.keys())
 
 
-def encode_experiment(quant_result: dict[str, Tensor], quant_meta: dict[str, object]) -> bytes:
+def _derive_shape(key, arch_params):
+    """Derive tensor shape from key name and architecture params dict."""
+    D = arch_params["D"]
+    H = arch_params["H"]
+    KV = arch_params["KV"]
+    MLP = arch_params["MLP"]
+    L = arch_params["L"]
+    vocab = arch_params["vocab"]
+    bigram_dim = arch_params["bigram_dim"]
+    bigram_vocab = arch_params.get("bigram_vocab", vocab * 2)
+    ve_dim = arch_params.get("ve_dim", 0)
+    hd = D // H
+    kv = KV * hd
+    mlp = D * MLP
+    if key.endswith(".q"):
+        base = key[:-2]
+        if "c_q" in base: return [D, D]
+        if "c_k" in base: return [kv, D]
+        if "c_v" in base: return [kv, D]
+        if ".attn." in base and "proj" in base: return [D, D]
+        if "mlp.fc" in base: return [mlp, D]
+        if ".mlp." in base and "proj" in base: return [D, mlp]
+        if "tok_emb" in base: return [vocab, D]
+        if "bigram.embed" in base: return [bigram_vocab, bigram_dim]
+        if "ve_shared.embed" in base and ve_dim: return [vocab, ve_dim]
+        if "ve_shared.proj" in base and ve_dim: return [kv, ve_dim]
+        if "lm_head" in base: return [vocab, D]
+    if key.endswith(".scale"):
+        base = key[:-6]
+        if "c_q" in base: return [D]
+        if "c_k" in base: return [kv]
+        if "c_v" in base: return [kv]
+        if ".attn." in base and "proj" in base: return [D]
+        if "mlp.fc" in base: return [mlp]
+        if ".mlp." in base and "proj" in base: return [D]
+        if "tok_emb" in base: return [vocab]
+        if "bigram.embed" in base: return [bigram_vocab]
+        if "ve_shared.embed" in base and ve_dim: return [vocab]
+        if "ve_shared.proj" in base and ve_dim: return [kv]
+        if "lm_head" in base: return [vocab]
+    if "q_gain" in key: return [H]
+    if "attn_scale" in key: return [D]
+    if "mlp_scale" in key: return [D]
+    if "resid_mix" in key: return [2, D]
+    if "skip_weight" in key: return [L // 2, D]
+    if "bigram.proj" in key: return [D, bigram_dim]
+    if "bigram.scale" in key: return []
+    if "smear" in key and "gate" in key: return [D]
+    if "dtg_gate.weight" in key: return [1, D]
+    if "dtg_gate.bias" in key: return [1]
+    if "ve_shared.proj" in key and ve_dim: return [kv, ve_dim]
+    if "ve_layer_scales" in key: return [1]
+    if "ve_shared.scale" in key: return []
+    return []
+
+
+def encode_experiment(quant_result: dict[str, Tensor], quant_meta: dict[str, object],
+                      arch_params: dict | None = None) -> bytes:
     """Separate int8/fp16/fp32 into distinct streams, transpose 2D, zstd-22 each."""
     if not HAS_ZSTD:
         raise ImportError("zstandard not installed")
@@ -336,15 +393,17 @@ def encode_experiment(quant_result: dict[str, Tensor], quant_meta: dict[str, obj
         shuffled = b"".join(arr[i::4].tobytes() for i in range(4))
         streams["fp32"] = comp.compress(shuffled)
 
-    # Encode metadata as JSON + LZMA — indexed format for compactness
+    # Encode metadata — robust format from fork
     all_keys = _sorted_keys(quant_result)
-    # Compact meta: derive meta_keys from tensor keys, encode types as string
+    all_keys_set = set(all_keys)
     meta_keys = []
     for k in all_keys:
-        if k.endswith(".q") or k.endswith(".scale"):
-            base = k.rsplit(".", 1)[0]
+        if k.endswith(".q"):
+            base = k[:-2]
             if base not in meta_keys:
                 meta_keys.append(base)
+        elif k.endswith(".scale") and (k[:-6] + ".q") in all_keys_set:
+            pass  # skip .scale if matching .q exists
         elif k not in meta_keys:
             meta_keys.append(k)
     type_str = ""
@@ -356,18 +415,25 @@ def encode_experiment(quant_result: dict[str, Tensor], quant_meta: dict[str, obj
         elif isinstance(info, dict) and info.get("type") == "int8": type_str += "8"
         else: type_str += "p"
 
-    # Abbreviate key names for compactness
-    def _shorten(k):
-        return k.replace("blocks.", "B").replace(".attn.", ".a.").replace(".mlp.", ".m.").replace(".weight", ".w").replace(".scale", ".s").replace(".proj.", ".p.")
+    # Build dtype string (explicit, more robust than suffix-based derivation)
+    dtype_str = ""
+    for k in all_keys:
+        t = quant_result[k]
+        if t.dtype == torch.int8: dtype_str += "i"
+        elif t.dtype == torch.float16: dtype_str += "h"
+        else: dtype_str += "f"
 
-    short_keys = [_shorten(k) for k in all_keys]
+    # Architecture params — use dict for flexibility
+    if arch_params is None:
+        arch_params = {"D": 512, "H": 8, "KV": 4, "MLP": 3, "L": 11,
+                       "vocab": 1024, "bigram_dim": 128}
 
     header = json.dumps({
-        "k": short_keys,
-        "a": [512, 8, 4, 3, 11, 1024, 128],  # [D, H, KV, MLP, L, vocab, bigram_dim]
-        "q": type_str,
+        "keys": all_keys,
+        "arch": arch_params,
+        "types": type_str,
+        "dtypes": dtype_str,
     }, separators=(",", ":")).encode()
-    # Raw LZMA2 for header too (saves ~32 bytes of .xz container overhead)
     header_filters = [{"id": lzma.FILTER_LZMA2, "preset": 9 | lzma.PRESET_EXTREME, "lc": 0, "lp": 0, "pb": 0}]
     header_c = lzma.compress(header, format=lzma.FORMAT_RAW, filters=header_filters)
 
@@ -381,46 +447,6 @@ def encode_experiment(quant_result: dict[str, Tensor], quant_meta: dict[str, obj
     if fp32_blob:
         out += struct.pack("<I", len(fp32_blob)) + fp32_blob
     return out
-
-
-def _derive_shape(key, D, H, KV, MLP, L, vocab=1024, bigram_dim=128):
-    """Derive tensor shape from key name and architecture params."""
-    hd = D // H
-    kv = KV * hd
-    mlp = D * MLP
-    bigram_vocab = vocab * 2
-
-    if key.endswith(".q"):
-        base = key[:-2]
-        if "c_q" in base: return [D, D]
-        if "c_k" in base: return [kv, D]
-        if "c_v" in base: return [kv, D]
-        if ".attn." in base and "proj" in base: return [D, D]
-        if "mlp.fc" in base: return [mlp, D]
-        if ".mlp." in base and "proj" in base: return [D, mlp]
-        if "tok_emb" in base: return [vocab, D]
-        if "bigram.embed" in base: return [bigram_vocab, bigram_dim]
-
-    if key.endswith(".scale"):
-        base = key[:-6]
-        if "c_q" in base: return [D]
-        if "c_k" in base: return [kv]
-        if "c_v" in base: return [kv]
-        if ".attn." in base and "proj" in base: return [D]
-        if "mlp.fc" in base: return [mlp]
-        if ".mlp." in base and "proj" in base: return [D]
-        if "tok_emb" in base: return [vocab]
-        if "bigram.embed" in base: return [bigram_vocab]
-
-    if "q_gain" in key: return [H]
-    if "attn_scale" in key: return [D]
-    if "mlp_scale" in key: return [D]
-    if "resid_mix" in key: return [2, D]
-    if "skip_weight" in key: return [L // 2, D]
-    if "bigram.proj" in key: return [D, bigram_dim]
-    if "bigram.scale" in key: return []
-    if "smear" in key and "gate" in key: return [D]
-    return []
 
 
 def decode_experiment(blob: bytes) -> tuple[dict[str, Tensor], dict[str, object]]:
@@ -445,30 +471,38 @@ def decode_experiment(blob: bytes) -> tuple[dict[str, Tensor], dict[str, object]
     off += header_sz
     header_filters = [{"id": lzma.FILTER_LZMA2, "preset": 9 | lzma.PRESET_EXTREME, "lc": 0, "lp": 0, "pb": 0}]
     header_json = json.loads(lzma.decompress(raw_header, format=lzma.FORMAT_RAW, filters=header_filters))
-    # Decode indexed format
-    def _expand(k):
-        return k.replace("B", "blocks.").replace(".a.", ".attn.").replace(".m.", ".mlp.").replace(".w", ".weight").replace(".s", ".scale").replace(".p.", ".proj.")
 
-    all_keys = [_expand(k) for k in header_json["k"]]
-    # Derive shapes from architecture params
-    arch = header_json["a"]
-    D, H, KV, MLP, L = arch[:5]
-    vocab = arch[5] if len(arch) > 5 else 1024
-    bigram_dim = arch[6] if len(arch) > 6 else 128
-    shapes_list = [_derive_shape(k, D, H, KV, MLP, L, vocab, bigram_dim) for k in all_keys]
-    # Derive dtype classification from key suffixes (.q → int8, else → fp16)
-    int8_indices = [i for i, k in enumerate(all_keys) if k.endswith(".q")]
-    fp16_indices = [i for i, k in enumerate(all_keys) if not k.endswith(".q")]
-    fp32_indices = []  # No fp32 in this format
+    all_keys = header_json["keys"]
+    # Architecture params — support both dict and list formats
+    arch = header_json["arch"]
+    if isinstance(arch, list):
+        arch = {"D": arch[0], "H": arch[1], "KV": arch[2], "MLP": arch[3], "L": arch[4],
+                "vocab": arch[5] if len(arch) > 5 else 1024,
+                "bigram_dim": arch[6] if len(arch) > 6 else 128}
+    shapes_list = [_derive_shape(k, arch) for k in all_keys]
+
+    # Dtype classification — use explicit dtype string if available, else derive from suffix
+    dtype_str = header_json.get("dtypes", "")
+    if dtype_str:
+        int8_indices = [i for i, c in enumerate(dtype_str) if c == "i"]
+        fp16_indices = [i for i, c in enumerate(dtype_str) if c == "h"]
+        fp32_indices = [i for i, c in enumerate(dtype_str) if c == "f"]
+    else:
+        int8_indices = [i for i, k in enumerate(all_keys) if k.endswith(".q")]
+        fp16_indices = [i for i, k in enumerate(all_keys) if not k.endswith(".q")]
+        fp32_indices = []
 
     # Reconstruct quant_meta from type_str
-    type_str = header_json.get("q", "")
+    type_str = header_json.get("types", "")
+    all_keys_set = set(all_keys)
     meta_keys = []
     for k in all_keys:
-        if k.endswith(".q") or k.endswith(".scale"):
-            base = k.rsplit(".", 1)[0]
+        if k.endswith(".q"):
+            base = k[:-2]
             if base not in meta_keys:
                 meta_keys.append(base)
+        elif k.endswith(".scale") and (k[:-6] + ".q") in all_keys_set:
+            pass
         elif k not in meta_keys:
             meta_keys.append(k)
     type_map = {"p": "passthrough", "c": "passthrough_ctrl", "6": {"type": "int6"}, "8": {"type": "int8"}}
@@ -479,8 +513,6 @@ def decode_experiment(blob: bytes) -> tuple[dict[str, Tensor], dict[str, object]
         "fp16_keys": [all_keys[i] for i in fp16_indices],
         "fp32_keys": [all_keys[i] for i in fp32_indices],
         "shapes": {all_keys[i]: shapes_list[i] for i in range(len(all_keys))},
-        "transposed": set(all_keys[i] for i in range(len(all_keys)) if len(shapes_list[i]) == 2),
-        "byte_shuffle": True,
         "meta": quant_meta,
     }
     # Decode clustered ANS int8 stream
@@ -609,7 +641,7 @@ def decode_experiment(blob: bytes) -> tuple[dict[str, Tensor], dict[str, object]
         fp32_raw_shuffled = b""
 
     # Unshuffle fp16: high bytes then low bytes → interleave
-    if fp16_raw_shuffled and header.get("byte_shuffle"):
+    if fp16_raw_shuffled:
         half = len(fp16_raw_shuffled) // 2
         high = np.frombuffer(fp16_raw_shuffled[:half], dtype=np.uint8)
         low = np.frombuffer(fp16_raw_shuffled[half:], dtype=np.uint8)
@@ -621,7 +653,7 @@ def decode_experiment(blob: bytes) -> tuple[dict[str, Tensor], dict[str, object]
         fp16_raw = fp16_raw_shuffled
 
     # Unshuffle fp32: 4 sub-streams → interleave
-    if fp32_raw_shuffled and header.get("byte_shuffle"):
+    if fp32_raw_shuffled:
         quarter = len(fp32_raw_shuffled) // 4
         subs = [np.frombuffer(fp32_raw_shuffled[i*quarter:(i+1)*quarter], dtype=np.uint8) for i in range(4)]
         interleaved = np.empty(len(fp32_raw_shuffled), dtype=np.uint8)
@@ -649,10 +681,7 @@ def decode_experiment(blob: bytes) -> tuple[dict[str, Tensor], dict[str, object]
             nbytes = numel * np.dtype(npdt).itemsize
             arr = np.frombuffer(raw, dtype=npdt, count=numel, offset=offsets[label])
             offsets[label] += nbytes
-            if False:  # No transpose needed — ANS doesn't benefit from it
-                pass
-            else:
-                t = torch.from_numpy(arr.copy()).reshape(shape)
+            t = torch.from_numpy(arr.copy()).reshape(shape)
             w[k] = t
     return w, header["meta"]
 
