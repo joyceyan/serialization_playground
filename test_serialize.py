@@ -20,11 +20,19 @@ import numpy as np
 import torch
 
 from serialize import (
+    HAS_BROTLI,
     HAS_ZSTD,
     decode_baseline,
     decode_experiment,
+    decode_exp63_brotli_fp16,
+    decode_exp64_brotli_fp32,
+    decode_exp65_brotli_best,
     encode_baseline,
     encode_experiment,
+    encode_exp63_brotli_fp16,
+    encode_exp64_brotli_fp32,
+    encode_exp65_brotli_best,
+    entropy_regularization_diagnostic,
     load_and_quantize,
     measure_scheme,
     mixed_quantize_int6,
@@ -144,6 +152,12 @@ def test_synthetic() -> None:
         ("baseline_zstd22", encode_baseline, decode_baseline),
         ("experiment", encode_experiment, decode_experiment),
     ]
+    if HAS_BROTLI:
+        schemes += [
+            ("exp63_brotli_fp16", encode_exp63_brotli_fp16, decode_exp63_brotli_fp16),
+            ("exp64_brotli_fp32", encode_exp64_brotli_fp32, decode_exp64_brotli_fp32),
+            ("exp65_brotli_best", encode_exp65_brotli_best, decode_exp65_brotli_best),
+        ]
 
     passed = 0
     failed = 0
@@ -176,6 +190,14 @@ def test_real(model_path: str) -> None:
         ("baseline_zstd22", encode_baseline, decode_baseline),
         ("experiment", encode_experiment, decode_experiment),
     ]
+    if HAS_BROTLI:
+        schemes += [
+            ("exp63_brotli_fp16", encode_exp63_brotli_fp16, decode_exp63_brotli_fp16),
+            ("exp64_brotli_fp32", encode_exp64_brotli_fp32, decode_exp64_brotli_fp32),
+            ("exp65_brotli_best", encode_exp65_brotli_best, decode_exp65_brotli_best),
+        ]
+    else:
+        print("NOTE: brotli not installed, skipping exp63-65. pip install brotli\n")
 
     print("Running benchmarks (3 trials each)...\n")
     results = []
@@ -188,6 +210,21 @@ def test_real(model_path: str) -> None:
 
     print()
     print_table(results)
+
+    # Entropy regularization diagnostic (exp66)
+    print("\n=== exp66: Entropy Regularization Diagnostic ===\n")
+    diag = entropy_regularization_diagnostic(quant_result, quant_meta)
+    agg = diag["aggregate"]
+    print(f"Current: {agg['total_symbols']:,} symbols, "
+          f"avg entropy {agg['avg_entropy_bps']:.4f} bits/symbol, "
+          f"{agg['avg_zeros_pct']:.1f}% zeros")
+    print(f"Theoretical minimum: {agg['theoretical_min_bytes']:,} bytes")
+    print(f"\nSimulated effect of entropy regularization (boosting zero-bin):")
+    print(f"  {'boost':<12} {'theo. bytes':>12} {'savings':>12}")
+    print(f"  {'-'*12} {'-'*12} {'-'*12}")
+    for label, sim in diag["entropy_reg_simulations"].items():
+        boost_str = label.replace("zero_boost_", "").replace("x", "x zeros")
+        print(f"  {boost_str:<12} {sim['theoretical_bytes']:>12,} {sim['savings_vs_current']:>+12,}")
 
     failed = sum(1 for r in results if r["max_abs_error"] > 0)
     if failed:
